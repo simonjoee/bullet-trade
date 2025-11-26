@@ -133,7 +133,7 @@ def _make_provider(monkeypatch, fake_xt: FakeXtData, **config):
     )
     # 避免真实依赖触发
     monkeypatch.setattr(miniqmt.MiniQMTProvider, "_ensure_tushare_helper", lambda self: None)
-    monkeypatch.delenv("JQDATA_CACHE_DIR", raising=False)
+    monkeypatch.delenv("DATA_CACHE_DIR", raising=False)
     provider = MiniQMTProvider(config)
     provider.auth()
     return provider
@@ -224,7 +224,7 @@ def test_get_split_dividend_uses_tushare_fallback(monkeypatch):
         staticmethod(lambda: fake_xt),
     )
     monkeypatch.setattr(miniqmt.MiniQMTProvider, "_ensure_tushare_helper", lambda self: fake_tushare)
-    monkeypatch.delenv("JQDATA_CACHE_DIR", raising=False)
+    monkeypatch.delenv("DATA_CACHE_DIR", raising=False)
 
     provider = MiniQMTProvider({"cache_dir": None})
 

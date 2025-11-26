@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from typing import Optional, Union
 from datetime import datetime
 import uuid
+import asyncio
+import inspect
 
 from .models import Order, OrderStatus, OrderStyle
 from .globals import log
 from .settings import get_settings
-from .runtime import process_orders_now
+from .runtime import process_orders_now, get_current_engine
 
 
 # 全局订单队列
@@ -36,6 +38,44 @@ class LimitOrderStyle:
 def _generate_order_id() -> str:
     """生成唯一订单ID"""
     return str(uuid.uuid4())
+
+
+def _trigger_order_processing(wait_timeout: Optional[float] = None) -> None:
+    """
+    触发订单处理：
+    - 实盘：将 _process_orders 投递到事件循环，避免当前协程阻塞；
+    - 回测/模拟：order_match_mode=immediate 时同步处理。
+    """
+    try:
+        settings = get_settings()
+        engine = get_current_engine()
+        if getattr(engine, "is_live", False):
+            loop = getattr(engine, "_loop", None)
+            if loop and loop.is_running():
+                wait_for_result = wait_timeout is None or wait_timeout > 0
+                try:
+                    try:
+                        running_loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        running_loop = None
+
+                    if wait_for_result and running_loop is None:
+                        fut = asyncio.run_coroutine_threadsafe(
+                            engine._process_orders(engine.context.current_dt),
+                            loop,
+                        )
+                        fut.result(timeout=wait_timeout if wait_timeout and wait_timeout > 0 else None)
+                    else:
+                        loop.call_soon_threadsafe(
+                            lambda: asyncio.create_task(engine._process_orders(engine.context.current_dt))
+                        )
+                except Exception as exc:
+                    log.debug(f"投递实盘订单处理任务失败: {exc}")
+                return
+        if settings.options.get('order_match_mode') == 'immediate':
+            process_orders_now()
+    except Exception as e:
+        log.warning(f"触发订单处理失败，保留到队列: {e}")
 
 
 def order(
@@ -65,10 +105,13 @@ def order(
         log.warning(f"下单数量为0，忽略订单: {security}")
         return None
     
-    if price is not None:
-        resolved_style: object = LimitOrderStyle(price)
+    if style is not None:
+        resolved_style: object = style
+    elif price is not None:
+        # 未显式传入限价风格时，按市价单带保护价处理
+        resolved_style = MarketOrderStyle(limit_price=price)
     else:
-        resolved_style = style if style is not None else MarketOrderStyle()
+        resolved_style = MarketOrderStyle()
 
     order_obj = Order(
         order_id=_generate_order_id(),
@@ -84,15 +127,58 @@ def order(
     
     _order_queue.append(order_obj)
     log.debug(f"创建订单: {security}, 数量: {amount}, 价格: {price}")
-    # 即时撮合：与聚宽保持一致的行为
-    try:
-        settings = get_settings()
-        if settings.options.get('order_match_mode') == 'immediate':
-            process_orders_now()
-    except Exception as e:
-        log.warning(f"即时撮合失败，保留到队列: {e}")
+    _trigger_order_processing(wait_timeout)
     
     return order_obj
+
+
+def cancel_order(order_or_id: Union[Order, str]) -> bool:
+    """
+    撤单：优先取消本地队列订单，若已下到券商且有券商订单号则调用券商撤单。
+    
+    Args:
+        order_or_id: Order 对象或订单 ID
+    
+    Returns:
+        是否成功接受撤单
+    """
+    target_id = order_or_id.order_id if isinstance(order_or_id, Order) else str(order_or_id)
+    removed = False
+    for idx, queued in list(enumerate(_order_queue)):
+        if queued.order_id == target_id:
+            _order_queue.pop(idx)
+            log.info(f"🗑️ 本地队列撤单成功: {target_id}")
+            removed = True
+            break
+    engine = get_current_engine()
+    broker_id = None
+    if isinstance(order_or_id, Order):
+        broker_id = getattr(order_or_id, "_broker_order_id", None)
+    if engine and getattr(engine, "broker", None) and broker_id:
+        try:
+            result = engine.broker.cancel_order(str(broker_id))
+            if inspect.isawaitable(result):
+                loop = getattr(engine, "_loop", None)
+                if loop and loop.is_running():
+                    fut = asyncio.run_coroutine_threadsafe(result, loop)
+                    result = fut.result()
+                else:
+                    result = asyncio.run(result)
+            if result:
+                log.info(f"🗑️ 券商撤单已提交: {broker_id}")
+                return True
+        except Exception as exc:
+            log.warning(f"券商撤单失败 {broker_id}: {exc}")
+    return removed
+
+
+def cancel_all_orders() -> int:
+    """取消本地队列所有订单，返回取消数量。"""
+    count = len(_order_queue)
+    _order_queue.clear()
+    if count:
+        log.info(f"🗑️ 已清空本地订单队列，共 {count} 笔")
+    return count
 
 
 def order_value(
@@ -125,10 +211,12 @@ def order_value(
         return None
     
     # 临时订单，amount会在撮合时计算
-    if price is not None:
-        resolved_style: object = LimitOrderStyle(price)
+    if style is not None:
+        resolved_style: object = style
+    elif price is not None:
+        resolved_style = MarketOrderStyle(limit_price=price)
     else:
-        resolved_style = style if style is not None else MarketOrderStyle()
+        resolved_style = MarketOrderStyle()
 
     order_obj = Order(
         order_id=_generate_order_id(),
@@ -147,12 +235,7 @@ def order_value(
     
     _order_queue.append(order_obj)
     log.debug(f"创建订单（按价值）: {security}, 价值: {value}")
-    try:
-        settings = get_settings()
-        if settings.options.get('order_match_mode') == 'immediate':
-            process_orders_now()
-    except Exception as e:
-        log.warning(f"即时撮合失败，保留到队列: {e}")
+    _trigger_order_processing(wait_timeout)
     
     return order_obj
 
@@ -171,10 +254,12 @@ def order_target(
         style = price
         price = None
 
-    if price is not None:
-        resolved_style: object = LimitOrderStyle(price)
+    if style is not None:
+        resolved_style: object = style
+    elif price is not None:
+        resolved_style = MarketOrderStyle(limit_price=price)
     else:
-        resolved_style = style if style is not None else MarketOrderStyle()
+        resolved_style = MarketOrderStyle()
 
     order_obj = Order(
         order_id=_generate_order_id(),
@@ -193,12 +278,7 @@ def order_target(
 
     _order_queue.append(order_obj)
     log.debug(f"创建订单（目标股数）: {security}, 目标数量: {amount}")
-    try:
-        settings = get_settings()
-        if settings.options.get('order_match_mode') == 'immediate':
-            process_orders_now()
-    except Exception as e:
-        log.warning(f"即时撮合失败，保留到队列: {e}")
+    _trigger_order_processing(wait_timeout)
 
     return order_obj
 
@@ -217,10 +297,12 @@ def order_target_value(
         style = price
         price = None
 
-    if price is not None:
-        resolved_style: object = LimitOrderStyle(price)
+    if style is not None:
+        resolved_style: object = style
+    elif price is not None:
+        resolved_style = MarketOrderStyle(limit_price=price)
     else:
-        resolved_style = style if style is not None else MarketOrderStyle()
+        resolved_style = MarketOrderStyle()
 
     order_obj = Order(
         order_id=_generate_order_id(),
@@ -239,12 +321,7 @@ def order_target_value(
 
     _order_queue.append(order_obj)
     log.debug(f"创建订单（目标价值）: {security}, 目标价值 {value}")
-    try:
-        settings = get_settings()
-        if settings.options.get('order_match_mode') == 'immediate':
-            process_orders_now()
-    except Exception as e:
-        log.warning(f"即时撮合失败，保留到队列: {e}")
+    _trigger_order_processing(wait_timeout)
 
     return order_obj
 

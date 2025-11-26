@@ -50,12 +50,12 @@
 # 默认数据源设置为 jqdata
 DEFAULT_DATA_PROVIDER=jqdata
 
+# 可选：通用缓存目录（会自动创建 jqdatasdk 等子目录）
+#DATA_CACHE_DIR=c:\\bt_cache
+
 # JQData 认证信息
 JQDATA_USERNAME=your_username
 JQDATA_PASSWORD=your_password
-
-# 可选：缓存目录
-JQDATA_CACHE_DIR=c:\\jqdata_cache
 ```
 
 ### 2. MiniQMT 配置（.env 示例）
@@ -72,9 +72,6 @@ MINIQMT_AUTO_DOWNLOAD=true
 
 # 交易日市场代码
 MINIQMT_MARKET=SH
-
-# 可选：缓存目录
-MINIQMT_CACHE_DIR=~/.bullet-trade/qmt-cache
 ```
 
 ## 📝 代码示例

@@ -7,6 +7,7 @@
 | --- | --- | --- | --- |
 | `DEFAULT_DATA_PROVIDER` | 否 | `jqdata` | 默认行情源，回测/实盘共用（`jqdata`/`tushare`/`qmt`） |
 | `DEFAULT_BROKER` | 否 | `qmt` | 默认券商/交易通道（`simulator`/`qmt`/`qmt-remote`） |
+| `DATA_CACHE_DIR` | 否 | `~/.bullet-trade/cache` | 行情缓存根目录，子目录按数据源名自动创建；留空禁用缓存 |
 | `LOG_DIR` | 否 | `logs` | 日志目录 |
 | `RUNTIME_DIR` | 否 | `runtime` | 运行态/持久化目录（含 g.pkl、live_state.json） |
 
@@ -15,8 +16,7 @@
 | --- | --- | --- | --- |
 | `DEFAULT_DATA_PROVIDER` | 是 | `jqdata` | 回测行情源 |
 | `JQDATA_USERNAME`/`JQDATA_PASSWORD` | 视数据源 | `your_user`/`your_pwd` | 聚宽数据账号 |
-| `JQDATA_CACHE_DIR` | 否 | `~/.bullet-trade/cache/jq_cache/` | 聚宽缓存目录 |
-| `TUSHARE_TOKEN`/`TUSHARE_CACHE_DIR` | 选 | `your_token` | 需 `tushare` 时配置 |
+| `TUSHARE_TOKEN` | 选 | `your_token` | 需 `tushare` 时配置 |
 | `MINIQMT_*` | 否 | 见实盘 | 仅当用 `qmt` 做行情源 |
 
 ## 本地实盘（QMT/模拟）

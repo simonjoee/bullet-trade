@@ -869,7 +869,7 @@ def generate_report(
     if gen_html:
         df = results.get('daily_records')
         if df is not None and len(df) > 0:
-            generate_html_report(results, output_file=os.path.join(output_dir, 'interactive_report.html'))
+            generate_html_report(results, output_file=os.path.join(output_dir, 'report.html'))
         else:
             print("⚠️  无交易日数据，跳过HTML报告生成")
     
@@ -1270,7 +1270,7 @@ def generate_html_report(results: Dict[str, Any] = None, output_file: Optional[s
             raise ValueError('必须提供 results 或 results_dir')
         results = load_results_from_directory(results_dir)
         if output_file is None:
-            output_file = os.path.join(results_dir, 'interactive_report.html')
+            output_file = os.path.join(results_dir, 'report.html')
     else:
         # 如提供目录，补全缺失字段
         if results_dir is not None:
@@ -1289,7 +1289,7 @@ def generate_html_report(results: Dict[str, Any] = None, output_file: Optional[s
             except Exception:
                 pass
         if output_file is None and results_dir is not None:
-            output_file = os.path.join(results_dir, 'interactive_report.html')
+            output_file = os.path.join(results_dir, 'report.html')
 
     df = results.get('daily_records')
     if df is None or len(df) == 0:

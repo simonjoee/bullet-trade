@@ -79,12 +79,18 @@ class SimulatorBroker(BrokerBase):
         return result
 
     async def buy(
-        self, security: str, amount: int, price: Optional[float] = None, wait_timeout: Optional[float] = None
+        self,
+        security: str,
+        amount: int,
+        price: Optional[float] = None,
+        wait_timeout: Optional[float] = None,
+        *,
+        market: bool = False,
     ) -> str:
         """买入：在后台线程执行以避免阻塞事件循环"""
-        return await asyncio.to_thread(self._buy_sync, security, amount, price)
+        return await asyncio.to_thread(self._buy_sync, security, amount, price, market)
 
-    def _buy_sync(self, security: str, amount: int, price: Optional[float]) -> str:
+    def _buy_sync(self, security: str, amount: int, price: Optional[float], market: bool) -> str:
         order_id = str(uuid.uuid4())[:8]
         trade_price = price if price is not None else self._mock_prices.get(security, 10.0)
 
@@ -107,6 +113,7 @@ class SimulatorBroker(BrokerBase):
             "amount": amount,
             "price": trade_price,
             "side": "buy",
+            "market": bool(market or price is None),
             "status": "filled",
             "time": datetime.now(),
         }
@@ -114,12 +121,18 @@ class SimulatorBroker(BrokerBase):
         return order_id
 
     async def sell(
-        self, security: str, amount: int, price: Optional[float] = None, wait_timeout: Optional[float] = None
+        self,
+        security: str,
+        amount: int,
+        price: Optional[float] = None,
+        wait_timeout: Optional[float] = None,
+        *,
+        market: bool = False,
     ) -> str:
         """卖出"""
-        return await asyncio.to_thread(self._sell_sync, security, amount, price)
+        return await asyncio.to_thread(self._sell_sync, security, amount, price, market)
 
-    def _sell_sync(self, security: str, amount: int, price: Optional[float]) -> str:
+    def _sell_sync(self, security: str, amount: int, price: Optional[float], market: bool) -> str:
         order_id = str(uuid.uuid4())[:8]
 
         if security not in self.positions or self.positions[security]["amount"] < amount:
@@ -141,6 +154,7 @@ class SimulatorBroker(BrokerBase):
             "amount": amount,
             "price": trade_price,
             "side": "sell",
+            "market": bool(market or price is None),
             "status": "filled",
             "time": datetime.now(),
         }

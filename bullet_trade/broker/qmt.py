@@ -279,7 +279,8 @@ class QmtBroker(BrokerBase):
                 self._xt_trader.cancel_order_stock, self._xt_account, target_id  # type: ignore[arg-type]
             )
             log.info(f"撤单请求: order_id={order_id}, sent={target_id}, ok={ok}")
-            return bool(ok)
+            # xtquant 返回 0/None/True 表示成功，-1/False/其它错误码为失败
+            return ok in (0, None, True)
         except Exception as e:
             raise RuntimeError(f"QMT 撤单失败: {e}") from e
 
@@ -620,7 +621,9 @@ class QmtBroker(BrokerBase):
                 or getattr(xtconstant, "ORDER_SELL", None)
                 or getattr(xtconstant, "ORDER_TYPE_SELL", 1)
             )
-        market_mode = bool(market)
+        market_mode = bool(market or price is None)
+        if not market_mode and price is None:
+            raise ValueError("限价单缺少价格，请提供 price 或将 market 设为 True")
         if market_mode and price is None:
             price = self._infer_market_price(security)
             if price is None:

@@ -5,9 +5,12 @@ from datetime import datetime, date as Date
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 import pandas as pd
+import logging
 
 from .base import DataProvider
 from ..cache import CacheManager
+
+logger = logging.getLogger(__name__)
 
 
 class MiniQMTProvider(DataProvider):
@@ -34,12 +37,8 @@ class MiniQMTProvider(DataProvider):
         self.data_dir = self.config.get("data_dir") or os.getenv("QMT_DATA_PATH")
         if self.data_dir:
             self.config["data_dir"] = self.data_dir
-        if "cache_dir" in self.config:
-            cache_dir = self.config.get("cache_dir")
-            use_env_cache = False
-        else:
-            cache_dir = os.getenv("MINIQMT_CACHE_DIR")
-            use_env_cache = False
+        cache_dir_set = "cache_dir" in self.config
+        cache_dir = self.config.get("cache_dir")
         self.market = (self.config.get("market") or os.getenv("MINIQMT_MARKET") or "SH").upper()
         self.mode = (self.config.get("mode") or "backtest").lower()
         if self.mode not in {"backtest", "live"}:
@@ -56,9 +55,10 @@ class MiniQMTProvider(DataProvider):
         self._cache = CacheManager(
             provider_name=self.name,
             cache_dir=cache_dir,
-            fallback_to_env=use_env_cache,
+            fallback_to_env=not cache_dir_set,
         )
         self._tushare_helper = None
+        self._tick_callback = None
 
     # ------------------------ 工具函数 ------------------------
     @staticmethod
@@ -209,6 +209,59 @@ class MiniQMTProvider(DataProvider):
             if env_dir:
                 self.data_dir = env_dir
                 self.config["data_dir"] = env_dir
+
+    # ------------------------ Tick 订阅 ------------------------
+    def subscribe_ticks(self, symbols: List[str]) -> None:
+        try:
+            xtdata = self._ensure_xtdata()
+            mapped = [self._normalize_security_code(s) for s in symbols]
+            for code in mapped:
+                xtdata.subscribe_quote(code, period="tick", callback=self._tick_callback)  # type: ignore[attr-defined]
+            logger.info("MiniQMT 订阅 tick: %s", mapped)
+        except Exception as exc:
+            logger.error("MiniQMT 订阅 tick 失败: %s", exc)
+            raise
+
+    def subscribe_markets(self, markets: List[str]) -> None:
+        try:
+            xtdata = self._ensure_xtdata()
+            # subscribe_whole_quote 不支持 period 参数
+            xtdata.subscribe_whole_quote(list(markets), callback=self._tick_callback)  # type: ignore[attr-defined]
+            logger.info("MiniQMT 订阅全市场 tick: %s", markets)
+        except Exception as exc:
+            logger.error("MiniQMT 订阅全市场 tick 失败: %s", exc)
+            raise
+
+    def unsubscribe_ticks(self, symbols: Optional[List[str]] = None) -> None:
+        try:
+            xtdata = self._ensure_xtdata()
+            if symbols:
+                mapped = [self._normalize_security_code(s) for s in symbols]
+                if hasattr(xtdata, "unsubscribe_quote"):
+                    xtdata.unsubscribe_quote(mapped)  # type: ignore[attr-defined]
+            else:
+                if hasattr(xtdata, "unsubscribe_all"):
+                    xtdata.unsubscribe_all()  # type: ignore[attr-defined]
+            logger.info("MiniQMT 退订 tick: %s", symbols if symbols else "ALL")
+        except Exception:
+            pass
+
+    def unsubscribe_markets(self, markets: Optional[List[str]] = None) -> None:
+        try:
+            if not markets:
+                return
+            xtdata = self._ensure_xtdata()
+            if hasattr(xtdata, "unsubscribe_whole_quote"):
+                xtdata.unsubscribe_whole_quote(list(markets))  # type: ignore[attr-defined]
+            logger.info("MiniQMT 退订市场 tick: %s", markets)
+        except Exception:
+            pass
+
+    def set_tick_callback(self, callback) -> None:
+        """
+        设置 xtdata 的 tick 回调，调用时会在后续 subscribe 中透传。
+        """
+        self._tick_callback = callback
 
     # ------------------------ K 线数据 ------------------------
     def get_price(

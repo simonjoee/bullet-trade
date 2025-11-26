@@ -195,7 +195,14 @@ class BacktestEngine:
             unsubscribe_all as _unsubscribe_all,
             get_current_tick as _get_current_tick,
         )
-        from .orders import order, order_value, order_target, order_target_value
+        from .orders import (
+            order,
+            order_value,
+            order_target,
+            order_target_value,
+            cancel_order,
+            cancel_all_orders,
+        )
         from .scheduler import run_daily, run_weekly, run_monthly, unschedule_all
         from ..data import api as wrapped_api
         from .notifications import send_msg as _send_msg, set_message_handler as _set_message_handler
@@ -322,6 +329,8 @@ class BacktestEngine:
         jq_mod.order_value = order_value
         jq_mod.order_target = order_target
         jq_mod.order_target_value = order_target_value
+        jq_mod.cancel_order = cancel_order
+        jq_mod.cancel_all_orders = cancel_all_orders
         jq_mod.MarketOrderStyle = MarketOrderStyle
         jq_mod.LimitOrderStyle = LimitOrderStyle
         # 调度 API
@@ -1229,7 +1238,8 @@ class BacktestEngine:
                         order.status = OrderStatus.canceled
                         continue
                 if isinstance(style_obj, MarketOrderStyle) and limit_price is not None and security_category == 'stock':
-                    trade_price = float(limit_price)
+                    # 市价单的保护价仅用于限价保护与资金检查，成交价仍按滑点撮合
+                    pass
 
                 # 买入前资金检查：按“可下单量上限”缩量 + 一手取整 + 最小申报量
                 final_amount = intended_amount

@@ -25,6 +25,9 @@ _current_context = None
 # 引入可插拔数据提供者，并设置默认Provider
 from .providers.base import DataProvider
 
+# 记录是否已在实盘强制关缓存并提醒过
+_cache_forced_off_warned = False
+
 
 def _create_provider(provider_name: Optional[str] = None, overrides: Optional[Dict[str, Any]] = None) -> DataProvider:
     """
@@ -121,7 +124,7 @@ def set_data_provider(provider: Union[DataProvider, str], **provider_kwargs) -> 
     设置当前数据提供者。
     支持直接传入 DataProvider 实例，或传入 provider 名称（如 'jqdata'、'tushare'、'miniqmt'）。
     """
-    global _provider, _auth_attempted, _security_info_cache
+    global _provider, _auth_attempted, _security_info_cache, _cache_forced_off_warned
     if isinstance(provider, DataProvider):
         _provider = provider
     else:
@@ -129,6 +132,7 @@ def set_data_provider(provider: Union[DataProvider, str], **provider_kwargs) -> 
 
     _auth_attempted = False
     _security_info_cache = {}
+    _cache_forced_off_warned = False
     try:
         _provider.auth()
         _auth_attempted = True
@@ -138,6 +142,7 @@ def set_data_provider(provider: Union[DataProvider, str], **provider_kwargs) -> 
 
 def get_data_provider() -> DataProvider:
     """获取当前数据提供者（若未认证则触发一次认证）"""
+    _maybe_disable_cache_for_live()
     _ensure_auth()
     return _provider
 
@@ -146,6 +151,30 @@ def set_current_context(context):
     """设置当前回测上下文"""
     global _current_context
     _current_context = context
+
+
+def _is_live_mode() -> bool:
+    try:
+        return bool(_current_context and getattr(_current_context, "run_params", {}).get("is_live"))
+    except Exception:
+        return False
+
+
+def _maybe_disable_cache_for_live() -> None:
+    """
+    实盘模式下强制关闭数据提供者的磁盘缓存，避免延迟/IO风险。
+    """
+    global _cache_forced_off_warned
+    if not _is_live_mode():
+        return
+    cache_obj = getattr(_provider, "_cache", None)
+    if cache_obj is None or not getattr(cache_obj, "enabled", False):
+        return
+    cache_dir = getattr(cache_obj, "cache_dir", "") or "未配置"
+    cache_obj.enabled = False
+    if not _cache_forced_off_warned:
+        log.warning("实盘模式已强制关闭数据源缓存，原缓存目录: %s", cache_dir)
+        _cache_forced_off_warned = True
 
 
 def _config_base_dir() -> str:

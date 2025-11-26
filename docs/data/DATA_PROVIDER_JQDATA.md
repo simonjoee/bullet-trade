@@ -5,7 +5,7 @@
 ## 依赖与认证
 - 依赖官方 `jqdatasdk`，并对 `get_price_engine` 打补丁以支持 `pre_factor_ref_date`。  
 - 支持从 `.env` 或 CLI 参数读取 `JQDATA_USERNAME`/`PASSWORD`/`SERVER`/`PORT`，也可以通过 `set_data_provider('jqdata', username='xxx', password='xxx')` 覆盖。  
-- `CacheManager` 默认读取 `JQDATA_CACHE_DIR`，可按需关闭或调整 TTL。
+- `CacheManager` 默认读取 `DATA_CACHE_DIR/jqdatasdk`，可按需关闭或调整 TTL。
 
 ## 动态复权
 - 当前真实价格模式 (`use_real_price=True`) 会将 `prefer_engine=True`、`pre_factor_ref_date=回测时点` 传递给 provider。  
@@ -18,7 +18,7 @@
 
 ## 可能遇到的问题
 1. **权限或额度不足**：`jqdatasdk` 抛出 `PermissionError` 时，通常意味着账号未开通所请求的数据表，需要在聚宽后台申请。  
-2. **自建缓存冲突**：若 `JQDATA_CACHE_DIR` 指向共享目录，请确保不同 provider 名称对应不同子目录，以免缓存键碰撞。  
+2. **自建缓存冲突**：若 `DATA_CACHE_DIR` 指向共享目录，请确保不会与其他应用复用同一路径。  
 3. **Panel 格式兼容**：聚宽仍使用 `pd.Panel` 返回多标的行情，本封装会尝试调用 `to_frame()` 并转换为 MultiIndex DataFrame；如遇 `FutureWarning` 可忽略。  
 4. **extreme 日期**：当 `start_date`/`end_date` 超出标的上市区间时，SDK 会返回空 DataFrame；框架会在日志层面提示“获取数据失败”，属预期表现。
 

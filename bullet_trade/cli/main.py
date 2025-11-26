@@ -2,10 +2,14 @@
 """
 BulletTrade 命令行主入口
 
-用法:
-    bullet-trade --help
-    bullet-trade backtest strategy.py --start 2023-01-01 --end 2023-12-31
-    bullet-trade optimize strategy.py --params params.json
+用法示例:
+    bullet-trade backtest strategy.py --start 2023-01-01 --end 2023-12-31 --output backtest_results/demo --auto-report
+    bullet-trade optimize strategy.py --params params.json --start 2023-01-01 --end 2023-12-31 --output optimization.csv --processes 4
+    bullet-trade live strategy.py --broker qmt --runtime-dir runtime/live --log-dir logs/live
+    bullet-trade report --input backtest_results/demo --format html --output reports/demo.html
+    bullet-trade server --server-type qmt --listen 0.0.0.0 --port 8080
+    bullet-trade lab --notebook-dir notebooks --no-browser --port 8088
+    bullet-trade --env-file .env.dev backtest strategy.py --start 2023-01-01 --end 2023-12-31
 """
 
 import os
@@ -51,14 +55,23 @@ def create_parser():
         epilog="""
 示例:
   # 运行回测
-  bullet-trade backtest strategy.py --start 2023-01-01 --end 2023-12-31
+  bullet-trade backtest strategy.py --start 2023-01-01 --end 2023-12-31 --output backtest_results/demo
+
+  # 实盘
+  bullet-trade live strategy.py --broker qmt --runtime-dir runtime/live --log-dir logs/live
+
+  # 服务端
+  bullet-trade server --server-type qmt --listen 0.0.0.0 --port 8080
+
+  # 研究环境 (JupyterLab)
+  bullet-trade lab
+
+  # 切换 env 文件
+  bullet-trade --env-file .env.dev backtest strategy.py --start 2023-01-01 --end 2023-12-31
 
   # 参数优化
-  bullet-trade optimize strategy.py --params params.json
-  
-  # 查看版本
-  bullet-trade --version
-  
+  bullet-trade optimize strategy.py --params params.json --start 2023-01-01 --end 2023-12-31 --output optimization.csv --processes 4
+
   更多信息请访问: https://github.com/BulletTrade/bullet-trade
                https://bullettrade.cn/
         """
@@ -142,7 +155,7 @@ def create_parser():
         '--images',
         dest='generate_images',
         action='store_true',
-        help='生成PNG图表输出 (默认关闭，以提升速度)'
+        help='生成PNG图表输出 (默认关闭，以提升速度；需安装 bullet-trade[report])'
     )
     backtest_parser.add_argument(
         '--no-csv',

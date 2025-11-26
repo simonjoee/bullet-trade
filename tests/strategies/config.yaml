@@ -48,8 +48,8 @@ a:
 
 # 分红验证策略配置
 dividend_buy_and_hold:
-  start_date: '2015-01-01'
-  end_date: '2025-01-01'
+  start_date: '2025-01-01'
+  end_date: '2025-05-01'
   capital_base: 1000000
   frequency: 'daily'
   benchmark: '000300.XSHG'

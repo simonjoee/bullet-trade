@@ -59,8 +59,10 @@ class RemoteQmtBroker(BrokerBase):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        *,
+        market: bool = False,
     ) -> str:
-        return await self._place_order("BUY", security, amount, price, wait_timeout)
+        return await self._place_order("BUY", security, amount, price, wait_timeout, market)
 
     async def sell(
         self,
@@ -68,8 +70,10 @@ class RemoteQmtBroker(BrokerBase):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        *,
+        market: bool = False,
     ) -> str:
-        return await self._place_order("SELL", security, amount, price, wait_timeout)
+        return await self._place_order("SELL", security, amount, price, wait_timeout, market)
 
     async def cancel_order(self, order_id: str) -> bool:
         loop = asyncio.get_running_loop()
@@ -93,21 +97,46 @@ class RemoteQmtBroker(BrokerBase):
     def sync_account(self) -> Dict[str, Any]:
         return self.get_account_info()
 
-    def _place_order(self, side: str, security: str, amount: int, price: Optional[float], wait_timeout: Optional[float]) -> asyncio.Future:
+    def _place_order(
+        self,
+        side: str,
+        security: str,
+        amount: int,
+        price: Optional[float],
+        wait_timeout: Optional[float],
+        market: bool = False,
+    ) -> asyncio.Future:
         loop = asyncio.get_running_loop()
-        return loop.run_in_executor(None, self._place_order_sync, side, security, amount, price, wait_timeout)
+        return loop.run_in_executor(None, self._place_order_sync, side, security, amount, price, wait_timeout, market)
 
-    def _place_order_sync(self, side: str, security: str, amount: int, price: Optional[float], wait_timeout: Optional[float]) -> str:
+    def _place_order_sync(
+        self,
+        side: str,
+        security: str,
+        amount: int,
+        price: Optional[float],
+        wait_timeout: Optional[float],
+        market: bool = False,
+    ) -> str:
         self._last_warning = None
         payload = self._base_payload()
-        style = {"type": "limit"}
-        if price is None:
+        effective_market = bool(market or price is None)
+        style = {"type": "market" if effective_market else "limit"}
+        if price is None and effective_market:
             price = self._infer_price(security)
-            style = {"type": "market"}
             if price is not None:
                 style["protect_price"] = price
-        if price is not None and style.get("type") == "limit":
-            style["price"] = price
+        if price is not None:
+            if effective_market:
+                style["protect_price"] = price
+            else:
+                style["price"] = price
+        if price is None and not effective_market:
+            raise ValueError("限价单缺少价格，请提供 price 或将 market 设为 True")
+        if wait_timeout is not None:
+            payload["wait_timeout"] = wait_timeout
+        if effective_market:
+            payload["market"] = True
         payload.update(
             {
                 "security": security,

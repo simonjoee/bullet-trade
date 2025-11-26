@@ -12,7 +12,7 @@ import numpy as np
 
 class CacheManager:
     """
-    文件缓存管理器：基于环境变量 JQDATA_CACHE_DIR 开启/关闭。
+    文件缓存管理器：基于环境变量 DATA_CACHE_DIR 开启/关闭。
     - 针对 provider 的 5 个高频网络方法提供统一缓存：get_price、get_trade_days、get_all_securities、get_index_stocks、get_split_dividend
     - 键生成包含 provider、method 以及归一化后的参数，避免误复用
     - 历史区间永久缓存；包含今天/动态区间采用 TTL（默认 1 天，可用 JQDATA_CACHE_EXPIRE_DAYS 配置）
@@ -29,7 +29,8 @@ class CacheManager:
         if cache_dir is not None:
             self.cache_dir = cache_dir
         elif fallback_to_env:
-            self.cache_dir = os.getenv("JQDATA_CACHE_DIR", "")
+            base_dir = os.getenv("DATA_CACHE_DIR", "")
+            self.cache_dir = os.path.join(base_dir, self.provider_name) if base_dir else ""
         else:
             self.cache_dir = ""
         self.enabled = bool(self.cache_dir)
@@ -344,24 +345,32 @@ class CacheManager:
             return list(obj)
         if result_type == "list_dict":
             # 把常见日期字段从字符串转换回日期对象，避免比较失败
+            def _convert_mapping(mapping: Dict[Any, Any]) -> Dict[Any, Any]:
+                y = dict(mapping)
+                for k in ("date", "start_date", "end_date", "ex_date", "record_date"):
+                    v = y.get(k)
+                    if isinstance(v, str):
+                        try:
+                            y[k] = pd.to_datetime(v).date()
+                        except Exception:
+                            pass
+                return y
+
             try:
+                if isinstance(obj, dict):
+                    return {k: _convert_mapping(v) if isinstance(v, dict) else v for k, v in obj.items()}
                 converted = []
                 for x in obj:
                     if isinstance(x, dict):
-                        y = dict(x)
-                        for k in ("date", "start_date", "end_date", "ex_date", "record_date"):
-                            v = y.get(k)
-                            if isinstance(v, str):
-                                try:
-                                    y[k] = pd.to_datetime(v).date()
-                                except Exception:
-                                    pass
-                        converted.append(y)
+                        converted.append(_convert_mapping(x))
                     else:
                         converted.append(x)
                 return converted
             except Exception:
-                return list(obj)
+                try:
+                    return list(obj)
+                except Exception:
+                    return obj
         if result_type == "list_date":
             try:
                 return [pd.to_datetime(x) for x in obj]

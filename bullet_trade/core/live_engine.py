@@ -56,7 +56,7 @@ from .settings import (
     OrderCost,
     FixedSlippage,
 )
-from ..data.api import get_current_data, set_current_context, get_security_info
+from ..data.api import get_current_data, set_current_context, get_security_info, get_data_provider
 from ..utils.env_loader import (
     get_broker_config,
     get_live_trade_config,
@@ -144,6 +144,7 @@ class _ResolvedOrder:
     price: Optional[float]
     last_price: float
     wait_timeout: Optional[float]
+    is_market: bool
 
 
 class LiveEngine:
@@ -209,9 +210,12 @@ class LiveEngine:
         self._security_name_cache: Dict[str, str] = {}
 
         self._risk = get_global_risk_controller()
+        self._order_lock: Optional[asyncio.Lock] = None
         self._last_account_refresh: Optional[datetime] = None
         self._calendar_guard = TradingCalendarGuard(self.config)
         self._initial_nav_synced: bool = False
+        self._provider_tick_callback_bound: bool = False
+        self._tick_subscription_updated: bool = False
 
     # ------------------------------------------------------------------
     # 公共入口
@@ -246,6 +250,7 @@ class LiveEngine:
         """
         self._loop = asyncio.get_running_loop()
         self._stop_event = asyncio.Event()
+        self._order_lock = asyncio.Lock()
         self.event_bus = EventBus(self._loop)
         self.async_scheduler = AsyncScheduler()
 
@@ -349,6 +354,11 @@ class LiveEngine:
         symbols, markets = load_subscription_state()
         self._tick_symbols = set(symbols)
         self._tick_markets = set(markets)
+        should_sync_initial = (
+            not self._tick_subscription_updated and (self._tick_symbols or self._tick_markets)
+        )
+        if should_sync_initial:
+            self._sync_provider_subscription(initial=True)
 
         self._last_schedule_dt = load_scheduler_cursor()
         if self._last_schedule_dt:
@@ -540,81 +550,93 @@ class LiveEngine:
     # ------------------------------------------------------------------
 
     async def _process_orders(self, current_dt: datetime) -> None:
-        orders = list(get_order_queue())
-        if not orders:
-            return
-        if not self.broker:
-            log.error("暂无券商实例，无法执行订单")
+        lock = self._order_lock or asyncio.Lock()
+        if self._order_lock is None:
+            self._order_lock = lock
+        async with lock:
+            orders = list(get_order_queue())
+            if not orders:
+                return
+            # 先清空已取出的队列，避免后续处理时误清除新加入的订单
             clear_order_queue()
-            return
-        try:
-            current_data = get_current_data()
-        except Exception as exc:
-            log.warning(f"获取 current_data 失败，订单无法执行: {exc}")
-            clear_order_queue()
-            return
-        open_position_symbols = self._get_open_position_symbols()
-        pending_new_positions: Set[str] = set()
-        for order in orders:
-            plan = self._build_order_plan(order, current_data)
-            if not plan:
-                continue
+            if not self.broker:
+                log.error("暂无券商实例，无法执行订单")
+                return
             try:
-                price_basis = plan.price if plan.price and plan.price > 0 else plan.last_price
-                order_value = float(plan.amount * max(price_basis, 0.0))
-                if order_value <= 0:
-                    log.warning(f"订单 {plan.security} 价值异常，忽略执行")
-                    continue
-                action = 'buy' if plan.is_buy else 'sell'
-                risk = self._risk
-                if risk:
-                    positions_count = len(open_position_symbols | pending_new_positions)
-                    total_value = float(getattr(self.context.portfolio, "total_value", 0.0) or 0.0)
-                    try:
-                        risk.check_order(
-                            order_value=order_value,
-                            current_positions_count=positions_count,
-                            security=plan.security,
-                            total_value=total_value,
-                            action=action,
-                        )
-                    except ValueError as risk_exc:
-                        log.error(f"风控拒绝委托[{action}] {plan.security}: {risk_exc}")
-                        continue
-                price_arg = plan.price if plan.price and plan.price > 0 else None
-                style_obj = getattr(order, "style", None)
-                style_name = style_obj.__class__.__name__ if style_obj else "MarketOrderStyle"
-                price_value = plan.price if plan.price is not None else price_arg
-                price_repr = f"{price_value:.4f}" if price_value else "未指定"
-                price_mode = "限价" if price_arg else "市价"
-                action_label = "买入" if plan.is_buy else "卖出"
-                log.info(
-                    f"执行委托[{action_label}] {plan.security}: 行情价={plan.last_price:.4f}, "
-                    f"委托价={price_repr}（{price_mode}），风格={style_name}, 数量={plan.amount}"
-                )
-                order_id: Optional[str] = None
-                if plan.is_buy:
-                    order_id = await self.broker.buy(
-                        plan.security, plan.amount, price_arg, wait_timeout=plan.wait_timeout
-                    )
-                else:
-                    order_id = await self.broker.sell(
-                        plan.security, plan.amount, price_arg, wait_timeout=plan.wait_timeout
-                    )
-                log.info(
-                    f"委托[{action_label}] {plan.security} 已提交，订单ID={order_id or '未知'}，"
-                    f"数量={plan.amount}"
-                )
-                if risk:
-                    try:
-                        risk.record_trade(order_value, action=action)
-                    except Exception as record_exc:
-                        log.debug(f"记录风控交易失败: {record_exc}")
-                    if plan.is_buy and plan.security not in open_position_symbols:
-                        pending_new_positions.add(plan.security)
+                current_data = get_current_data()
             except Exception as exc:
-                log.error(f"委托失败 {order.security}: {exc}")
-        clear_order_queue()
+                log.warning(f"获取 current_data 失败，订单无法执行: {exc}")
+                return
+            open_position_symbols = self._get_open_position_symbols()
+            pending_new_positions: Set[str] = set()
+            for order in orders:
+                plan = self._build_order_plan(order, current_data)
+                if not plan:
+                    continue
+                try:
+                    price_basis = plan.price if plan.price and plan.price > 0 else plan.last_price
+                    order_value = float(plan.amount * max(price_basis, 0.0))
+                    if order_value <= 0:
+                        log.warning(f"订单 {plan.security} 价值异常，忽略执行")
+                        continue
+                    action = 'buy' if plan.is_buy else 'sell'
+                    risk = self._risk
+                    if risk:
+                        positions_count = len(open_position_symbols | pending_new_positions)
+                        total_value = float(getattr(self.context.portfolio, "total_value", 0.0) or 0.0)
+                        try:
+                            risk.check_order(
+                                order_value=order_value,
+                                current_positions_count=positions_count,
+                                security=plan.security,
+                                total_value=total_value,
+                                action=action,
+                            )
+                        except ValueError as risk_exc:
+                            log.error(f"风控拒绝委托[{action}] {plan.security}: {risk_exc}")
+                            continue
+                    price_arg = plan.price if plan.price and plan.price > 0 else None
+                    market_flag = bool(plan.is_market)
+                    style_obj = getattr(order, "style", None)
+                    style_name = style_obj.__class__.__name__ if style_obj else "MarketOrderStyle"
+                    price_value = plan.price if plan.price is not None else price_arg
+                    price_repr = f"{price_value:.4f}" if price_value else "未指定"
+                    price_mode = "市价" if market_flag else "限价"
+                    action_label = "买入" if plan.is_buy else "卖出"
+                    log.info(
+                        f"执行委托[{action_label}] {plan.security}: 行情价={plan.last_price:.4f}, "
+                        f"委托价={price_repr}（{price_mode}），风格={style_name}, 数量={plan.amount}"
+                    )
+                    order_id: Optional[str] = None
+                    if plan.is_buy:
+                        order_id = await self.broker.buy(
+                            plan.security, plan.amount, price_arg, wait_timeout=plan.wait_timeout, market=market_flag
+                        )
+                    else:
+                        order_id = await self.broker.sell(
+                            plan.security, plan.amount, price_arg, wait_timeout=plan.wait_timeout, market=market_flag
+                        )
+                    try:
+                        setattr(order, "_broker_order_id", order_id)
+                    except Exception:
+                        pass
+                    log.info(
+                        f"委托[{action_label}] {plan.security} 已提交，订单ID={order_id or '未知'}，"
+                        f"数量={plan.amount}"
+                    )
+                    if risk:
+                        try:
+                            risk.record_trade(order_value, action=action)
+                        except Exception as record_exc:
+                            log.debug(f"记录风控交易失败: {record_exc}")
+                        if plan.is_buy and plan.security not in open_position_symbols:
+                            pending_new_positions.add(plan.security)
+                except Exception as exc:
+                    log.error(f"委托失败 {order.security}: {exc}")
+            try:
+                self.refresh_account_snapshot(force=True)
+            except Exception as exc:
+                log.debug(f"订单执行后刷新账户快照失败: {exc}")
 
     def _build_order_plan(self, order: Order, current_data) -> Optional[_ResolvedOrder]:
         try:
@@ -657,6 +679,7 @@ class LiveEngine:
 
         exec_price: Optional[float] = None
         style_obj = getattr(order, "style", None)
+        is_market = not isinstance(style_obj, LimitOrderStyle)
         if isinstance(style_obj, LimitOrderStyle):
             exec_price = float(style_obj.price)
         elif isinstance(style_obj, MarketOrderStyle) and style_obj.limit_price is not None:
@@ -676,7 +699,15 @@ class LiveEngine:
                 log.error(f"{order.security} 无法计算保护价: {exc}")
                 return None
 
-        return _ResolvedOrder(order.security, amount, is_buy, exec_price, last_price, getattr(order, "wait_timeout", None))
+        return _ResolvedOrder(
+            order.security,
+            amount,
+            is_buy,
+            exec_price,
+            last_price,
+            getattr(order, "wait_timeout", None),
+            is_market,
+        )
 
     def _resolve_order_amount(self, order: Order, last_price: float) -> Tuple[int, bool]:
         price = last_price if last_price > 0 else 1.0
@@ -782,66 +813,122 @@ class LiveEngine:
         if len(self._tick_symbols.union(symbols)) > limit:
             raise ValueError(f"tick 订阅超限：最多 {limit} 个，当前 {len(self._tick_symbols)} 个")
 
+        self._tick_subscription_updated = True
         self._tick_symbols.update(symbols)
         self._tick_markets.update(markets)
         persist_subscription_state(self._tick_symbols, self._tick_markets)
 
-        if self.broker and self.broker.supports_tick_subscription():
-            try:
-                if symbols:
-                    self.broker.subscribe_ticks(list(symbols))
-                if markets and hasattr(self.broker, 'subscribe_markets'):
-                    self.broker.subscribe_markets(list(markets))
-            except Exception as exc:
-                log.warning(f"券商订阅失败: {exc}")
+        self._sync_provider_subscription()
+        log.info(
+            "已登记 tick 订阅: symbols=%s markets=%s",
+            list(self._tick_symbols),
+            list(self._tick_markets),
+        )
 
     def unregister_tick_subscription(self, symbols: Sequence[str], markets: Sequence[str]) -> None:
+        self._tick_subscription_updated = True
         for sym in symbols:
             self._tick_symbols.discard(sym)
         for mk in markets:
             self._tick_markets.discard(mk)
         persist_subscription_state(self._tick_symbols, self._tick_markets)
-
-        if self.broker and self.broker.supports_tick_subscription():
-            try:
-                if symbols:
-                    self.broker.unsubscribe_ticks(list(symbols))
-            except Exception as exc:
-                log.warning(f"券商取消订阅失败: {exc}")
+        self._sync_provider_subscription(unsubscribe=True, symbols=list(symbols), markets=list(markets))
 
     def unsubscribe_all_ticks(self) -> None:
+        self._tick_subscription_updated = True
         self._tick_symbols.clear()
         self._tick_markets.clear()
         persist_subscription_state(self._tick_symbols, self._tick_markets)
-        if self.broker and self.broker.supports_tick_subscription():
-            try:
-                self.broker.unsubscribe_ticks()
-            except Exception:
-                pass
+        self._sync_provider_subscription(unsubscribe=True, symbols=None, markets=None)
 
     def get_current_tick_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
         if symbol in self._latest_ticks:
             return self._latest_ticks[symbol]
-        if self.broker:
-            try:
-                tick = self.broker.get_current_tick(symbol)
+        tick = self._fetch_tick_snapshot(symbol)
+        if tick:
+            self._latest_ticks[symbol] = tick
+        return tick
+
+    def _fetch_tick_snapshot(self, symbol: str) -> Optional[Dict[str, Any]]:
+        try:
+            if self.broker and hasattr(self.broker, "get_current_tick"):
+                tick = self.broker.get_current_tick(symbol)  # type: ignore[attr-defined]
                 if tick:
-                    self._latest_ticks[symbol] = tick
-                return tick
-            except Exception:
-                return None
+                    return tick
+        except Exception:
+            return None
+        try:
+            provider = get_data_provider()
+            if provider and hasattr(provider, "get_current_tick"):
+                return provider.get_current_tick(symbol)  # type: ignore[attr-defined]
+        except Exception:
+            return None
         return None
 
+    def _sync_provider_subscription(
+        self,
+        initial: bool = False,
+        unsubscribe: bool = False,
+        symbols: Optional[List[str]] = None,
+        markets: Optional[List[str]] = None,
+    ) -> None:
+        """
+        将当前订阅状态同步给数据提供者。
+        """
+        try:
+            provider = get_data_provider()
+            if not provider:
+                return
+            if unsubscribe:
+                provider.unsubscribe_ticks(symbols)  # type: ignore[attr-defined]
+                if markets:
+                    provider.unsubscribe_markets(markets)  # type: ignore[attr-defined]
+                return
+            # subscribe
+            if self.handle_tick_func and hasattr(provider, "set_tick_callback"):
+                provider.set_tick_callback(self._provider_tick_callback)  # type: ignore[attr-defined]
+                self._provider_tick_callback_bound = True
+            if self._tick_symbols:
+                provider.subscribe_ticks(list(self._tick_symbols))  # type: ignore[attr-defined]
+            if self._tick_markets:
+                provider.subscribe_markets(list(self._tick_markets))  # type: ignore[attr-defined]
+            if initial and (self._tick_symbols or self._tick_markets):
+                log.info(
+                    "已向数据源同步历史 tick 订阅: symbols=%s markets=%s",
+                    list(self._tick_symbols),
+                    list(self._tick_markets),
+                )
+        except Exception as exc:
+            log.warning("同步数据源 tick 订阅失败", exc_info=True)
+
+    def _provider_tick_callback(self, data: Any) -> None:
+        """
+        数据源推送 tick 时的直通回调：不拆分、不加工，直接转发给策略的 handle_tick。
+        """
+        if not self.handle_tick_func or not self._loop:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._call_hook(self.handle_tick_func, data), self._loop)  # type: ignore[arg-type]
+        except Exception:
+            pass
     async def _tick_loop(self) -> None:
         if not self.config.tick_sync_enabled:
             return
         interval = max(1, self.config.tick_sync_interval)
         assert self._loop is not None
         while not self._stop_event.is_set():
-            if self._tick_symbols and self.broker:
+            # provider 已绑定 tick 回调则不再轮询，避免重复采样或回落到精简快照
+            if self._provider_tick_callback_bound:
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    continue
+                continue
+
+            if self._tick_symbols:
                 for sym in list(self._tick_symbols):
                     try:
-                        tick = await self._loop.run_in_executor(None, self.broker.get_current_tick, sym)
+                        tick = await self._loop.run_in_executor(None, self._fetch_tick_snapshot, sym)
                     except Exception:
                         tick = None
                     if tick:

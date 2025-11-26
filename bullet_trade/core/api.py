@@ -18,7 +18,8 @@ from .settings import (
 
 # 导入订单函数
 from .orders import (
-    order, order_value, order_target, order_target_value, MarketOrderStyle, LimitOrderStyle
+    order, order_value, order_target, order_target_value, cancel_order, cancel_all_orders,
+    MarketOrderStyle, LimitOrderStyle
 )
 
 # 导入调度函数
@@ -442,7 +443,8 @@ __all__ = [
     'OrderCost', 'FixedSlippage',
     
     # 订单函数
-    'order', 'order_value', 'order_target', 'order_target_value', 'MarketOrderStyle', 'LimitOrderStyle',
+    'order', 'order_value', 'order_target', 'order_target_value', 'cancel_order', 'cancel_all_orders',
+    'MarketOrderStyle', 'LimitOrderStyle',
     
     # 调度函数
     'run_daily', 'run_weekly', 'run_monthly', 'unschedule_all',

@@ -142,6 +142,13 @@ def get_data_provider_config() -> dict:
     Returns:
         配置字典
     """
+    base_cache_dir = get_env('DATA_CACHE_DIR')
+
+    def cache_dir_for(name: str) -> Optional[str]:
+        if not base_cache_dir:
+            return None
+        return str(Path(base_cache_dir) / name)
+
     return {
         'default': get_env('DEFAULT_DATA_PROVIDER', 'jqdata'),
         'jqdata': {
@@ -149,11 +156,11 @@ def get_data_provider_config() -> dict:
             'password': get_env('JQDATA_PASSWORD'),
             'server': get_env('JQDATA_SERVER'),
             'port': get_env_int('JQDATA_PORT', 0),
-            'cache_dir': get_env('JQDATA_CACHE_DIR'),
+            'cache_dir': cache_dir_for('jqdata'),
         },
         'tushare': {
             'token': get_env('TUSHARE_TOKEN'),
-            'cache_dir': get_env('TUSHARE_CACHE_DIR'),
+            'cache_dir': cache_dir_for('tushare'),
         },
         'qmt': {
             'host': get_env('QMT_HOST', '127.0.0.1'),
@@ -161,7 +168,7 @@ def get_data_provider_config() -> dict:
             'data_dir': get_env('QMT_DATA_PATH'),
             'auto_download': get_env_optional_bool('MINIQMT_AUTO_DOWNLOAD'),
             'market': get_env('MINIQMT_MARKET'),
-            'cache_dir': get_env('MINIQMT_CACHE_DIR'),
+            'cache_dir': cache_dir_for('miniqmt'),
             'tushare_token': get_env('TUSHARE_TOKEN'),
         },
         'remote_qmt': {
@@ -307,8 +314,9 @@ def get_live_trade_config() -> dict:
         'broker_heartbeat_interval': get_env_int('BROKER_HEARTBEAT_INTERVAL', 30),
         'runtime_dir': get_env('RUNTIME_DIR', './runtime'),
         'portfolio_refresh_throttle_ms': get_env_int('PORTFOLIO_REFRESH_THROTTLE_MS', 200),
-        'market_buy_price_percent': get_env_float('MARKET_BUY_PRICE_PERCENT', 0.00246 / 2),
-        'market_sell_price_percent': get_env_float('MARKET_SELL_PRICE_PERCENT', -0.00246 / 2),
+        # 市价保护价默认 ±1.5%（可被 .env 覆盖）
+        'market_buy_price_percent': get_env_float('MARKET_BUY_PRICE_PERCENT', 0.015),
+        'market_sell_price_percent': get_env_float('MARKET_SELL_PRICE_PERCENT', -0.015),
     }
 
 

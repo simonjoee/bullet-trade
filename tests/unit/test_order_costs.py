@@ -10,6 +10,7 @@ from bullet_trade.core.models import Context, Portfolio, Position
 from bullet_trade.core.orders import order, order_value, clear_order_queue
 from bullet_trade.core.runtime import set_current_engine
 from bullet_trade.core.settings import reset_settings, set_slippage, FixedSlippage
+import importlib
 from bullet_trade.data import api as data_api
 from bullet_trade.data.providers.base import DataProvider
 
@@ -98,8 +99,20 @@ def provider():
 
 
 def _setup_engine(current_dt: datetime) -> BacktestEngine:
+    # 重新加载 engine 模块，防止其他测试 monkeypatch 默认滑点逻辑
+    import bullet_trade.core.engine as _engine_module
+    _engine_module = importlib.reload(_engine_module)
+    global BacktestEngine
+    BacktestEngine = _engine_module.BacktestEngine
+    # 恢复默认滑点计算方法，避免外部 monkeypatch 遗留
+    BacktestEngine._calc_trade_price_with_default_slippage = (
+        _engine_module.BacktestEngine._calc_trade_price_with_default_slippage  # type: ignore[attr-defined]
+    )
+
     reset_globals()
     reset_settings()
+    # 显式设置回默认滑点 0.00246（双边各一半）避免全局污染
+    set_slippage(FixedSlippage(0.00246))
     clear_order_queue()
 
     engine = BacktestEngine(initial_cash=200000)

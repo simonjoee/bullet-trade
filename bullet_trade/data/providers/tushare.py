@@ -18,16 +18,12 @@ class TushareProvider(DataProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         self.config = config or {}
         self._token = self.config.get("token") or os.getenv("TUSHARE_TOKEN")
-        if "cache_dir" in self.config:
-            cache_dir = self.config.get("cache_dir")
-            use_env_cache = False
-        else:
-            cache_dir = os.getenv("TUSHARE_CACHE_DIR")
-            use_env_cache = False
+        cache_dir_set = "cache_dir" in self.config
+        cache_dir = self.config.get("cache_dir")
         self._cache = CacheManager(
             provider_name=self.name,
             cache_dir=cache_dir,
-            fallback_to_env=use_env_cache,
+            fallback_to_env=not cache_dir_set,
         )
         self._pro = None
 

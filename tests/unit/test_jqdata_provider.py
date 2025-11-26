@@ -14,7 +14,12 @@ class TestJQDataProviderAuth:
         recorded = {}
 
         def fake_auth(user, pwd, host=None, port=None):
-            recorded.update({'user': user, 'pwd': pwd, 'host': host, 'port': port})
+            payload = {'user': user, 'pwd': pwd}
+            if host is not None:
+                payload['host'] = host
+            if port is not None:
+                payload['port'] = port
+            recorded.update(payload)
 
         monkeypatch.setattr(jqdata.jq, 'auth', fake_auth)
 
@@ -40,7 +45,12 @@ class TestJQDataProviderAuth:
         recorded = {}
 
         def fake_auth(user, pwd, host=None, port=None):
-            recorded.update({'user': user, 'pwd': pwd, 'host': host, 'port': port})
+            payload = {'user': user, 'pwd': pwd}
+            if host is not None:
+                payload['host'] = host
+            if port is not None:
+                payload['port'] = port
+            recorded.update(payload)
 
         monkeypatch.setattr(jqdata.jq, 'auth', fake_auth)
 
@@ -57,8 +67,6 @@ class TestJQDataProviderAuth:
         assert recorded == {
             'user': 'legacy_user',
             'pwd': 'legacy_pwd',
-            'host': None,
-            'port': None,
         }
 
     def test_auth_strips_inline_comments_from_port(self, monkeypatch):
@@ -66,7 +74,12 @@ class TestJQDataProviderAuth:
         recorded = {}
 
         def fake_auth(user, pwd, host=None, port=None):
-            recorded.update({'user': user, 'pwd': pwd, 'host': host, 'port': port})
+            payload = {'user': user, 'pwd': pwd}
+            if host is not None:
+                payload['host'] = host
+            if port is not None:
+                payload['port'] = port
+            recorded.update(payload)
 
         monkeypatch.setattr(jqdata.jq, 'auth', fake_auth)
 
@@ -89,7 +102,12 @@ class TestJQDataProviderAuth:
         recorded = {}
 
         def fake_auth(user, pwd, host=None, port=None):
-            recorded.update({'user': user, 'pwd': pwd, 'host': host, 'port': port})
+            payload = {'user': user, 'pwd': pwd}
+            if host is not None:
+                payload['host'] = host
+            if port is not None:
+                payload['port'] = port
+            recorded.update(payload)
 
         monkeypatch.setattr(jqdata.jq, 'auth', fake_auth)
 

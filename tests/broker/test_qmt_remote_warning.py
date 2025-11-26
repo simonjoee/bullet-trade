@@ -22,7 +22,8 @@ class _FakeConn:
         return {"order_id": "oid-1", "warning": "000001.XSHE 停牌，拒绝远程委托"}
 
 
-def test_remote_warning_prints_and_captures(capsys):
+def test_remote_warning_prints_and_captures(capsys, monkeypatch):
+    monkeypatch.setenv("QMT_SERVER_TOKEN", "dummy-token")
     broker = RemoteQmtBroker(account_id="acc")
     broker._connection = _FakeConn()  # type: ignore
     broker.connect()

@@ -77,3 +77,36 @@ class DataProvider(ABC):
         默认返回空字典，可由具体数据提供者覆盖。
         """
         return {}
+
+    def get_current_tick(self, security: str) -> Optional[Dict[str, Any]]:
+        """
+        返回最新 tick 快照（可选实现）。
+
+        若数据源不支持实时 tick，可直接返回 None；
+        支持实时行情的数据源（如 miniQMT/xtdata）可覆盖该方法以提供 sid/last_price/dt 等字段。
+        """
+        return None
+
+    def subscribe_ticks(self, symbols: List[str]) -> None:
+        """
+        订阅指定标的 tick（可选实现）。默认不操作。
+        """
+        return None
+
+    def subscribe_markets(self, markets: List[str]) -> None:
+        """
+        订阅市场级 tick（可选实现，如 ['SH','SZ']）。默认不操作。
+        """
+        return None
+
+    def unsubscribe_ticks(self, symbols: Optional[List[str]] = None) -> None:
+        """
+        取消 tick 订阅（可选实现）。symbols 为 None 表示全部取消。默认不操作。
+        """
+        return None
+
+    def unsubscribe_markets(self, markets: Optional[List[str]] = None) -> None:
+        """
+        取消市场级 tick 订阅（可选实现）。默认不操作。
+        """
+        return None

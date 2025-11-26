@@ -13,6 +13,7 @@ from datetime import date, datetime, time as Time
 from dataclasses import dataclass, field
 from enum import Enum
 import inspect
+import traceback
 
 from .scheduler import TimeExpression, get_market_periods, get_time_aliases
 from .globals import log
@@ -503,8 +504,13 @@ class AsyncScheduler:
         # 收集结果
         for task, result in zip(tasks_to_run, task_results):
             if isinstance(result, Exception):
-                logger.error(f"❌ 任务 {task.task_id} 执行异常: {result}")
-                results[task.task_id] = {'error': str(result)}
+                # 打印堆栈，便于定位任务内部异常
+                tb = ''.join(traceback.format_exception(type(result), result, result.__traceback__))
+                logger.error(
+                    f"❌ 任务 {task.task_id} 执行异常: {result}\n{tb}",
+                    exc_info=(type(result), result, result.__traceback__)
+                )
+                results[task.task_id] = {'error': str(result), 'traceback': tb}
             else:
                 results[task.task_id] = {'result': result}
         

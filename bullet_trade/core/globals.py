@@ -139,6 +139,9 @@ class Logger:
             'strategy': logging.INFO,  # 策略日志级别（保持INFO，不受system影响）
         }
 
+        # 让 bullet_trade.* 标准 logger 复用同一套 handler，方便 CLI 场景统一屏幕/文件输出
+        self._sync_standard_logger()
+
     def configure_file_logging(
         self, *, log_dir: Optional[str] = None, file_path: Optional[str] = None, level_name: Optional[str] = None
     ) -> None:
@@ -174,8 +177,6 @@ class Logger:
                 backupCount=3,
                 encoding='utf-8',
             )
-            if isinstance(handler, logging.StreamHandler):
-                handler.setFormatter(_ColorFormatter('%(asctime)s [%(levelname)s] %(message)s', '%Y-%m-%d %H:%M:%S', self._color_enabled))
             fh.setLevel(target_level)
             fh.setFormatter(self._formatter)
             if self._file_handler:
@@ -189,6 +190,7 @@ class Logger:
                     pass
             self.logger.addHandler(fh)
             self._file_handler = fh
+            self._sync_standard_logger()
         except Exception:
             pass
 
@@ -204,6 +206,18 @@ class Logger:
             return sys.stdout.isatty()
         except Exception:
             return False
+
+    def _sync_standard_logger(self) -> None:
+        """将 bullet_trade.* 标准 logger 的 handler/级别与全局 logger 保持一致，便于 CLI 后台/文件统一输出"""
+        try:
+            std_logger = logging.getLogger("bullet_trade")
+            std_logger.handlers.clear()
+            for handler in self.logger.handlers:
+                std_logger.addHandler(handler)
+            std_logger.setLevel(self.logger.level)
+            std_logger.propagate = False
+        except Exception:
+            pass
     
     def set_strategy_time(self, dt):
         """设置策略时间（回测时间）"""
@@ -284,6 +298,7 @@ class Logger:
                 self.logger.setLevel(self._levels[level])
                 for handler in self.logger.handlers:
                     handler.setLevel(self._levels[level])
+                self._sync_standard_logger()
 
 
 # 创建全局单例

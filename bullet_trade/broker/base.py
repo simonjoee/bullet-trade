@@ -82,6 +82,8 @@ class BrokerBase(ABC):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        *,
+        market: bool = False,
     ) -> str:
         """
         买入
@@ -89,8 +91,9 @@ class BrokerBase(ABC):
         Args:
             security: 证券代码
             amount: 买入数量
-            price: 委托价格（None为市价）
+            price: 委托价格（None为市价；market=True 时亦视为市价，可用作保护价/参考价）
             wait_timeout: 本次下单等待超时（秒），None 表示使用默认配置
+            market: 是否按市价委托（由券商映射到对应价格类型）
             
         Returns:
             订单ID
@@ -104,6 +107,8 @@ class BrokerBase(ABC):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        *,
+        market: bool = False,
     ) -> str:
         """
         卖出
@@ -111,8 +116,9 @@ class BrokerBase(ABC):
         Args:
             security: 证券代码
             amount: 卖出数量
-            price: 委托价格（None为市价）
+            price: 委托价格（None为市价；market=True 时亦视为市价，可用作保护价/参考价）
             wait_timeout: 本次下单等待超时（秒），None 表示使用默认配置
+            market: 是否按市价委托（由券商映射到对应价格类型）
             
         Returns:
             订单ID
@@ -265,24 +271,4 @@ class BrokerBase(ABC):
             pass
 
 
-
-    def supports_tick_subscription(self) -> bool:
-        """是否支持 tick 订阅（默认否，可以由子类覆盖）。"""
-        return False
-
-    def subscribe_ticks(self, symbols: List[str]) -> None:
-        """订阅指定标的 tick 数据，默认不实现。"""
-        raise NotImplementedError("当前券商不支持 tick 订阅")
-
-    def subscribe_markets(self, markets: List[str]) -> None:
-        """订阅全市场 tick（如 ['SH','SZ']），默认不实现。"""
-        raise NotImplementedError("当前券商不支持市场级 tick 订阅")
-
-    def unsubscribe_ticks(self, symbols: Optional[List[str]] = None) -> None:
-        """取消订阅指定标的 tick，symbols=None 表示取消全部。"""
-        return None
-
-    def get_current_tick(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """返回最近的 tick 快照，默认不提供。"""
-        return None
 

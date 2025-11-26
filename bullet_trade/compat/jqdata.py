@@ -39,7 +39,8 @@ __all__ = [
     'g', 'log', 'send_msg', 'set_message_handler',
     
     # 订单相关
-    'order', 'order_target', 'order_value', 'order_target_value', 'MarketOrderStyle', 'LimitOrderStyle',
+    'order', 'order_target', 'order_value', 'order_target_value', 'cancel_order', 'cancel_all_orders',
+    'MarketOrderStyle', 'LimitOrderStyle',
     'FixedSlippage',
     'OrderCost',
     

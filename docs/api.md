@@ -69,13 +69,16 @@
 - 未提供聚宽的基础面/财务等查询接口（如 `get_fundamentals`），请勿依赖。
 
 ## 订单与组合
-- 下单函数（与聚宽同名，未实现撤单/批量成交等扩展功能）：  
-  - `order(security, amount, price=None, style=None, wait_timeout=None)`：按股数下单；`amount>0` 买入，`<0` 卖出；`price` 或 `style=LimitOrderStyle(price)` 为限价，否则市价。  
-  - `order_value(security, value, price=None, style=None, wait_timeout=None)`：按金额下单，数量在撮合时根据价差计算。  
-  - `order_target(security, amount, price=None, style=None, wait_timeout=None)`：将持仓调整到目标股数。  
-  - `order_target_value(security, value, price=None, style=None, wait_timeout=None)`：将持仓调整到目标市值。  
+- 下单/撤单函数（与聚宽同名）：  
+  - `order(security, amount, price=None, style=None, wait_timeout=None)`：按股数下单；`amount>0` 买入，`<0` 卖出；`style=LimitOrderStyle(price)` 显式限价；仅传 `price` 默认视为市价单带保护价（`MarketOrderStyle(limit_price=price)`）。  
+  - `order_value(security, value, price=None, style=None, wait_timeout=None)`：按金额下单，数量在撮合时根据价差计算；传 `price` 同样默认市价+保护价，限价需用 `LimitOrderStyle`。  
+  - `order_target(security, amount, price=None, style=None, wait_timeout=None)`：将持仓调整到目标股数；价格参数同上。  
+  - `order_target_value(security, value, price=None, style=None, wait_timeout=None)`：将持仓调整到目标市值；价格参数同上。  
+  - `cancel_order(order_or_id)`：撤单；若订单仍在本地队列直接移除，否则尝试用券商订单号撤券商。  
+  - `cancel_all_orders()`：撤销本地队列所有订单。  
   - 默认 `set_option('order_match_mode', 'immediate')` 时创建即撮合；否则在 bar 结束批量撮合。
-- 价格样式：`MarketOrderStyle(limit_price=None, buy_price_percent=None, sell_price_percent=None)`（市价，可选保护价或价差系数）；`LimitOrderStyle(price)`（限价）。
+- 价格样式：`MarketOrderStyle(limit_price=None, buy_price_percent=None, sell_price_percent=None)`（市价，可选保护价或价差系数，实盘会带保护价并传 `market=True`）；`LimitOrderStyle(price)`（限价）。
+- 回测撮合：无论市价/限价，成交价默认按滑点计算（显式 `set_slippage` > 默认 0.00246/2 双边）；保护价/限价仅用于资金检查和接受条件，不直接决定成交价。
 - 成本/滑点：`OrderCost`、`FixedSlippage` 同上。
 
 ## 行情订阅（Tick）

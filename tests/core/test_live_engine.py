@@ -13,17 +13,20 @@ import pytest
 
 
 from bullet_trade.broker.base import BrokerBase
+from bullet_trade.core import pricing
 from bullet_trade.core.async_scheduler import AsyncScheduler
 from bullet_trade.core.event_bus import EventBus
 from bullet_trade.core.live_engine import LiveEngine, LivePortfolioProxy, TradingCalendarGuard
 from bullet_trade.core.live_runtime import load_subscription_state, save_g
 from bullet_trade.core.globals import g, reset_globals
+from bullet_trade.core.orders import order, clear_order_queue
+from bullet_trade.core.runtime import set_current_engine
 
 
 class DummyBroker(BrokerBase):
     def __init__(self):
         super().__init__("dummy")
-        self.orders: list[tuple[str, int, float, str]] = []
+        self.orders: list[tuple[str, int, float, str, bool]] = []
         self.account_sync_calls = 0
         self.order_sync_calls = 0
         self.heartbeat_calls = 0
@@ -43,12 +46,28 @@ class DummyBroker(BrokerBase):
     def get_positions(self):
         return []
 
-    async def buy(self, security: str, amount: int, price: float | None = None, wait_timeout: float | None = None) -> str:
-        self.orders.append((security, amount, price or 0.0, "buy"))
+    async def buy(
+        self,
+        security: str,
+        amount: int,
+        price: float | None = None,
+        wait_timeout: float | None = None,
+        *,
+        market: bool = False,
+    ) -> str:
+        self.orders.append((security, amount, price or 0.0, "buy", market))
         return f"buy-{len(self.orders)}"
 
-    async def sell(self, security: str, amount: int, price: float | None = None, wait_timeout: float | None = None) -> str:
-        self.orders.append((security, amount, price or 0.0, "sell"))
+    async def sell(
+        self,
+        security: str,
+        amount: int,
+        price: float | None = None,
+        wait_timeout: float | None = None,
+        *,
+        market: bool = False,
+    ) -> str:
+        self.orders.append((security, amount, price or 0.0, "sell", market))
         return f"sell-{len(self.orders)}"
 
     async def cancel_order(self, order_id: str) -> bool:
@@ -596,6 +615,173 @@ async def test_handle_tick_hook_receives_context(tmp_path):
     assert payload["context"] is engine.context
     assert payload["tick"]["sid"] == "000001.XSHE"
     await engine._shutdown()
+
+
+@pytest.mark.asyncio
+async def test_market_flag_propagates_to_broker(monkeypatch, tmp_path):
+    strategy = _write_strategy(tmp_path)
+    cfg = {
+        "runtime_dir": str(tmp_path / "runtime"),
+        "g_autosave_enabled": False,
+        "account_sync_enabled": False,
+        "order_sync_enabled": False,
+        "tick_sync_enabled": False,
+        "risk_check_enabled": False,
+        "broker_heartbeat_interval": 0,
+    }
+    engine = LiveEngine(
+        strategy_file=strategy,
+        broker_factory=DummyBroker,
+        live_config=cfg,
+    )
+    engine.broker = DummyBroker()
+    engine.context.portfolio.available_cash = 1_000_000
+    engine.context.portfolio.total_value = 1_000_000
+    engine._risk = None
+
+    class Snap:
+        paused = False
+        last_price = 10.0
+        high_limit = 10.5
+        low_limit = 9.5
+
+    monkeypatch.setattr("bullet_trade.core.live_engine.get_current_data", lambda: {"000001.XSHE": Snap()})
+
+    clear_order_queue()
+    order("000001.XSHE", 100)
+    order("000001.XSHE", 100, price=10.5)
+
+    await engine._process_orders(engine.context.current_dt)
+
+    assert len(engine.broker.orders) == 2
+
+    sec1, amt1, price1, side1, market1 = engine.broker.orders[0]
+    assert (sec1, amt1, side1, market1) == ("000001.XSHE", 100, "buy", True)
+    expected_price = pricing.compute_market_protect_price("000001.XSHE", 10.0, 10.5, 9.5, 0.015, True)
+    assert price1 == pytest.approx(expected_price)
+
+    sec2, amt2, price2, side2, market2 = engine.broker.orders[1]
+    assert (sec2, amt2, side2, market2) == ("000001.XSHE", 100, "buy", False)
+    assert price2 == pytest.approx(10.5)
+
+
+@pytest.mark.asyncio
+async def test_process_orders_runs_once_with_lock(monkeypatch, tmp_path):
+    strategy = _write_strategy(tmp_path)
+    cfg = {
+        "runtime_dir": str(tmp_path / "runtime"),
+        "g_autosave_enabled": False,
+        "account_sync_enabled": False,
+        "order_sync_enabled": False,
+        "tick_sync_enabled": False,
+        "risk_check_enabled": False,
+        "broker_heartbeat_interval": 0,
+    }
+    engine = LiveEngine(
+        strategy_file=strategy,
+        broker_factory=DummyBroker,
+        live_config=cfg,
+    )
+    loop = asyncio.get_running_loop()
+    engine._loop = loop
+    engine._order_lock = asyncio.Lock()
+    engine._stop_event = asyncio.Event()
+    engine.event_bus = EventBus(loop)
+    engine.async_scheduler = AsyncScheduler()
+    engine.broker = DummyBroker()
+    engine._risk = None
+    engine.context.portfolio.available_cash = 1_000_000
+    engine.context.portfolio.total_value = 1_000_000
+    set_current_engine(engine)
+
+    class Snap:
+        paused = False
+        last_price = 10.0
+        high_limit = 10.5
+        low_limit = 9.5
+
+    monkeypatch.setattr("bullet_trade.core.live_engine.get_current_data", lambda: {"000001.XSHE": Snap()})
+
+    clear_order_queue()
+    order("000001.XSHE", 100, wait_timeout=0)
+
+    task1 = asyncio.create_task(engine._process_orders(engine.context.current_dt))
+    task2 = asyncio.create_task(engine._process_orders(engine.context.current_dt))
+    await asyncio.gather(task1, task2)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert len(engine.broker.orders) == 1
+    set_current_engine(None)
+
+
+@pytest.mark.asyncio
+async def test_order_waits_until_processed(monkeypatch, tmp_path):
+    strategy = _write_strategy(tmp_path)
+    cfg = {
+        "runtime_dir": str(tmp_path / "runtime"),
+        "g_autosave_enabled": False,
+        "account_sync_enabled": False,
+        "order_sync_enabled": False,
+        "tick_sync_enabled": False,
+        "risk_check_enabled": False,
+        "broker_heartbeat_interval": 0,
+    }
+    gate = asyncio.Event()
+
+    class SlowBroker(DummyBroker):
+        def __init__(self, signal: asyncio.Event):
+            super().__init__()
+            self.signal = signal
+
+        async def buy(
+            self,
+            security: str,
+            amount: int,
+            price: float | None = None,
+            wait_timeout: float | None = None,
+            *,
+            market: bool = False,
+        ) -> str:
+            await self.signal.wait()
+            return await super().buy(security, amount, price, wait_timeout=wait_timeout, market=market)
+
+    engine = LiveEngine(
+        strategy_file=strategy,
+        broker_factory=SlowBroker,
+        live_config=cfg,
+    )
+    loop = asyncio.get_running_loop()
+    engine._loop = loop
+    engine._order_lock = asyncio.Lock()
+    engine._stop_event = asyncio.Event()
+    engine.event_bus = EventBus(loop)
+    engine.async_scheduler = AsyncScheduler()
+    engine.broker = SlowBroker(gate)
+    engine._risk = None
+    engine.context.portfolio.available_cash = 1_000_000
+    engine.context.portfolio.total_value = 1_000_000
+    set_current_engine(engine)
+
+    class Snap:
+        paused = False
+        last_price = 10.0
+        high_limit = 10.5
+        low_limit = 9.5
+
+    monkeypatch.setattr("bullet_trade.core.live_engine.get_current_data", lambda: {"000001.XSHE": Snap()})
+
+    clear_order_queue()
+
+    async def _run_order():
+        return await asyncio.to_thread(order, "000001.XSHE", 100)
+
+    order_task = asyncio.create_task(_run_order())
+    await asyncio.sleep(0)
+    assert len(engine.broker.orders) == 0
+    gate.set()
+    await order_task
+    assert len(engine.broker.orders) == 1
+    set_current_engine(None)
 
 
 def test_live_engine_run_returns_nonzero_on_error(tmp_path, monkeypatch, caplog):

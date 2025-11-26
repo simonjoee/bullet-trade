@@ -18,22 +18,47 @@
    服务端需已通过 `bullet-trade server --enable-data --enable-broker` 启动。
 2. 在策略中声明订阅并实现回调：
    ```python
+    import datetime as dt
+    from jqdata import *
+
+
     def initialize(context):
-        # 首次启动或回测中订阅；Live 重启后建议在 process_initialize 再调一次
-        subscribe(['000001.XSHE', '000002.XSHE'], 'tick')
+        pass
+
 
     def process_initialize(context):
-        # Live 场景重启或热更新后，确保券商侧也已订阅
-        subscribe(['000001.XSHE', '000002.XSHE'], 'tick')
+        subscribe(['000001.XSHE', '000002.XSHE','232592.XSHG','104749.SZ'], 'tick')
+
 
     def handle_tick(context, tick):
-        # tick 至少含 sid/last_price/dt；远程推送时可能附带 symbol（QMT 代码）
-        sid = tick.get('sid') or tick.get('symbol')
-        ts = tick.get('dt') or tick.get('time')
-        log.info(
-            f"[TICK] sid={sid} last={tick.get('last_price') or tick.get('lastPrice')} "
-            f"ask1={tick.get('ask1')} bid1={tick.get('bid1')} ts={ts}"
-        )
+        """
+        假定 tick 是 dict，形如 {code: [payload,...]} 或 {code: payload}。
+        只提取最常用字段并打印当前时间与 tick 时间的延迟。
+        """
+        now = dt.datetime.now()
+        if not isinstance(tick, dict):
+            log.info(tick)
+            return
+
+        for code, payload in tick.items():
+            entry = payload[0] if isinstance(payload, (list, tuple)) and payload else payload
+            if not isinstance(entry, dict):
+                log.info(f"code={code} tick={entry}")
+                continue
+            ts_raw = entry.get('time') or entry.get('datetime')
+            delay = ""
+            if isinstance(ts_raw, (int, float)):
+                try:
+                    delay_val = (now - dt.datetime.fromtimestamp(ts_raw / 1000)).total_seconds()
+                    delay = f"[delay=+{delay_val:.3f}s] "
+                except Exception:
+                    delay = ""
+            log.info(
+                f"{delay}code={code} last={entry.get('lastPrice')} "
+                f"bid={entry.get('bidPrice')} ask={entry.get('askPrice')} "
+                f"vol={entry.get('volume')} amt={entry.get('amount')} ts={ts_raw}"
+            )
+
    ```
 3. 启动实盘：  
    `bullet-trade live strategies/demo.py --broker qmt-remote --env-file .env.live`

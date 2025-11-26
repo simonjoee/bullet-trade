@@ -25,6 +25,7 @@ import pandas as pd
 from matplotlib.backends.backend_pdf import PdfPages
 
 from bullet_trade.core import analysis as core_analysis
+from bullet_trade.utils.font_config import setup_chinese_fonts
 
 DEFAULT_TEMPLATE_NAME = "default.html"
 DEFAULT_METRICS_ORDER: Sequence[str] = (
@@ -84,6 +85,13 @@ def generate_cli_report(
     fmt = fmt.lower()
     if fmt not in {"html", "pdf"}:
         raise ReportGenerationError(f"不支持的报告格式: {fmt}")
+
+    # 确保字体配置已加载，避免图表/PDF 出现中文乱码
+    try:
+        setup_chinese_fonts()
+    except Exception:
+        # 字体配置异常不阻断报告生成
+        pass
 
     results_path = Path(input_dir).expanduser().resolve()
     if not results_path.exists():

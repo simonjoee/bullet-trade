@@ -9,7 +9,7 @@
   - `mode`：回测 `backtest`（默认）或实盘 `live`，用于控制自动下载等行为，可在初始化参数中传入。  
   - `auto_download` / `MINIQMT_AUTO_DOWNLOAD`：是否调用 `xtdata.download_history_data`；未指定时回测模式默认开启、实盘模式默认关闭。  
   - `market` / `MINIQMT_MARKET`：交易日市场代码（默认 `SH`）。  
-  - `cache_dir` / `MINIQMT_CACHE_DIR`：覆写 provider 缓存目录（默认沿用 `JQDATA_CACHE_DIR`）。  
+  - `cache_dir` / `DATA_CACHE_DIR`：磁盘缓存目录，若不显式传入则使用 `DATA_CACHE_DIR/miniqmt`；未设置则禁用缓存。  
   - `tushare_token` / `TUSHARE_TOKEN`：xtquant 缺失分红或指数成分时自动回退到 Tushare。
 
 ## 代码后缀兼容

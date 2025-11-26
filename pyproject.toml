@@ -65,8 +65,14 @@ qmt = [
 qmtserver = [
     "pywin32>=305; platform_system == 'Windows'",
 ]
+report = [
+    "snapshot-selenium>=0.0.3",
+    "selenium>=4.10.0",
+    "chromedriver-autoinstaller>=0.6.0",
+    "snapshot-phantomjs>=0.0.3",
+]
 all = [
-    "bullet-trade[dev,tushare,qmt,qmtserver]",
+    "bullet-trade[dev,tushare,qmt,qmtserver,report]",
 ]
 
 [project.urls]

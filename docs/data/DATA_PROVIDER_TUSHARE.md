@@ -5,7 +5,7 @@
 ## 安装与认证
 - 依赖 `tushare>=1.2.0`，建议通过 `pip install bullet-trade[tushare]` 一键安装。  
 - 认证优先级：`set_data_provider` 参数 > `.env` 中的 `TUSHARE_TOKEN` > 构造函数传入。  
-- Provider 会在首次调用时自动创建 `ts.pro_api` 客户端，并将 `cache_dir` 设置为 `TUSHARE_CACHE_DIR`。
+- Provider 会在首次调用时自动创建 `ts.pro_api` 客户端，并将 `cache_dir` 设置为 `DATA_CACHE_DIR/tushare`（若配置）。
 
 ## 价格获取策略
 - 始终获取未复权行情 + 复权因子，自行计算前/后复权并应用 `pre_factor_ref_date`。  
@@ -24,7 +24,7 @@
 - 交易日来源于 `trade_cal(exchange='SSE')`，只保留 `is_open=1` 的记录。
 
 ## 使用提示
-1. **速率限制**：Pro 账号默认 5000 次/分钟，如高频调用建议开启 `TUSHARE_CACHE_DIR` 缓存目录或在私有网络中本地化数据。  
+1. **速率限制**：Pro 账号默认 5000 次/分钟，如高频调用建议开启 `DATA_CACHE_DIR` 缓存目录或在私有网络中本地化数据。  
 2. **数据完整性**：部分场外基金/LOF 在 `fund_basic` 中缺少 `delist_date`，封装会将其解析为 `NaT`，可在策略端自行填补。  
 3. **指数资产判断**：当前默认 `ts_code` 均按股票资产处理，如需要精确的 `asset` 可在后续版本通过 `stock_basic` 信息进一步区分。  
 4. **分钟线权限**：若账号未开通分钟级别数据，`ts.pro_bar` 会返回空 DataFrame；框架会在日志层面记录，策略需自行兜底。

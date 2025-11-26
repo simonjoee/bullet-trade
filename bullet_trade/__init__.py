@@ -40,7 +40,8 @@ from .core.settings import (
     OrderCost, FixedSlippage
 )
 from .core.orders import (
-    order, order_value, order_target, order_target_value, MarketOrderStyle, LimitOrderStyle
+    order, order_value, order_target, order_target_value, cancel_order, cancel_all_orders,
+    MarketOrderStyle, LimitOrderStyle
 )
 from .core.scheduler import (
     run_daily, run_weekly, run_monthly, unschedule_all
@@ -71,7 +72,8 @@ __all__ = [
     'set_benchmark', 'set_order_cost', 'set_slippage', 'set_option',
     'OrderCost', 'FixedSlippage',
     # 订单函数
-    'order', 'order_value', 'order_target', 'order_target_value', 'MarketOrderStyle', 'LimitOrderStyle',
+    'order', 'order_value', 'order_target', 'order_target_value', 'cancel_order', 'cancel_all_orders',
+    'MarketOrderStyle', 'LimitOrderStyle',
     # 调度函数
     'run_daily', 'run_weekly', 'run_monthly', 'unschedule_all',
     # 回测引擎
