@@ -1,0 +1,1 @@
+ bullet-trade backtest strategies/demo_strategy.py --start 2025-09-10 --end 2025-09-17 --output results/demo

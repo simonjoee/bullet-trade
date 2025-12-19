@@ -176,6 +176,10 @@ def get_data_provider_config() -> dict:
             'port': get_env_int('QMT_SERVER_PORT', 58620),
             'token': get_env('QMT_SERVER_TOKEN'),
             'tls_cert': get_env('QMT_SERVER_TLS_CERT'),
+        },
+        'local': {
+            'db_path': get_env('LOCAL_DB_PATH'),
+            'cache_dir': cache_dir_for('local'),
         }
     }
 

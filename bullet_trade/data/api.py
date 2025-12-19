@@ -57,6 +57,11 @@ def _create_provider(provider_name: Optional[str] = None, overrides: Optional[Di
         provider_cfg = dict(config.get('remote_qmt', {}) or {})
         provider_cfg.update(overrides)
         return RemoteQmtProvider(provider_cfg)
+    if target in ('local',):
+        from .providers.local import LocalProvider
+        provider_cfg = dict(config.get('local', {}) or {})
+        provider_cfg.update(overrides)
+        return LocalProvider(provider_cfg)
 
     raise ValueError(f"未知的数据提供者: {provider_name}")
 

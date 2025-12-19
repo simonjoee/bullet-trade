@@ -5,7 +5,7 @@
 ## 通用
 | 变量 | 必填 | 示例/默认 | 作用 |
 | --- | --- | --- | --- |
-| `DEFAULT_DATA_PROVIDER` | 否 | `jqdata` | 默认行情源，回测/实盘共用（`jqdata`/`tushare`/`qmt`） |
+| `DEFAULT_DATA_PROVIDER` | 否 | `jqdata` | 默认行情源，回测/实盘共用（`jqdata`/`tushare`/`qmt`/`local`） |
 | `DEFAULT_BROKER` | 否 | `qmt` | 默认券商/交易通道（`simulator`/`qmt`/`qmt-remote`） |
 | `DATA_CACHE_DIR` | 否 | `~/.bullet-trade/cache` | 行情缓存根目录，子目录按数据源名自动创建；留空禁用缓存 |
 | `LOG_DIR` | 否 | `logs` | 日志目录 |
@@ -16,10 +16,11 @@
 ## 回测
 | 变量 | 必填 | 示例/默认 | 作用 |
 | --- | --- | --- | --- |
-| `DEFAULT_DATA_PROVIDER` | 是 | `jqdata` | 回测行情源 |
+| `DEFAULT_DATA_PROVIDER` | 是 | `jqdata` | 回测行情源（`jqdata`/`tushare`/`qmt`/`local`） |
 | `JQDATA_USERNAME`/`JQDATA_PASSWORD` | 视数据源 | `your_user`/`your_pwd` | 聚宽数据账号 |
 | `TUSHARE_TOKEN` | 选 | `your_token` | 需 `tushare` 时配置 |
 | `MINIQMT_*` | 否 | 见实盘 | 仅当用 `qmt` 做行情源 |
+| `LOCAL_DB_PATH` | 选 | `/path/to/qmt_data.db` | 使用 `local` 数据源时指定 SQLite 数据库路径，未设置则使用默认路径 `data/qmt_data.db` |
 
 ## 本地实盘（QMT/模拟）
 | 变量 | 必填 | 示例/默认 | 作用 |
