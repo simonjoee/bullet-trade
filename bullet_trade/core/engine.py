@@ -158,6 +158,10 @@ class BacktestEngine:
         unschedule_all()
         
         try:
+            # 在加载策略前，先注册 jqlib 和 jqfactor 到 sys.modules
+            # 这样策略文件中的 from jqlib.technical_analysis import * 才能正常工作
+            self._register_compat_modules()
+            
             # 动态加载策略模块
             spec = importlib.util.spec_from_file_location("strategy", self.strategy_file)
             if spec and spec.loader:
@@ -183,6 +187,31 @@ class BacktestEngine:
         except Exception as e:
             log.error(f"加载策略失败: {e}")
             raise
+    
+    def _register_compat_modules(self):
+        """注册兼容模块到 sys.modules，必须在策略加载前调用"""
+        import types as _types
+        
+        # 注册 jqlib 兼容模块
+        if 'jqlib' not in sys.modules:
+            from ..compat.jqlib import technical_analysis as jqlib_technical_analysis
+            jqlib_mod = _types.ModuleType('jqlib')
+            # 设置为包（有 __path__ 属性），这样 from jqlib.technical_analysis import * 才能工作
+            jqlib_mod.__path__ = []
+            jqlib_mod.technical_analysis = jqlib_technical_analysis
+            sys.modules['jqlib'] = jqlib_mod
+            # 注册 technical_analysis 子模块
+            sys.modules['jqlib.technical_analysis'] = jqlib_technical_analysis
+        
+        # 注册 jqfactor 兼容模块（存根）
+        if 'jqfactor' not in sys.modules:
+            from ..compat import jqfactor
+            jqfactor_mod = _types.ModuleType('jqfactor')
+            # 将 jqfactor 模块的所有导出项复制到新模块
+            for attr in dir(jqfactor):
+                if not attr.startswith('_'):
+                    setattr(jqfactor_mod, attr, getattr(jqfactor, attr))
+            sys.modules['jqfactor'] = jqfactor_mod
     
     def _inject_globals(self, module):
         """向策略模块注入全局变量和函数"""
@@ -362,6 +391,12 @@ class BacktestEngine:
         module.jqdata = jq_mod
         # 如有需要，可在此处同步注册到 jqdatasdk：保持禁用以避免误用
         # sys.modules['jqdatasdk'] = jq_mod
+        
+        # 确保兼容模块已注册（应该已经在 _register_compat_modules 中注册）
+        if 'jqlib' in sys.modules:
+            module.jqlib = sys.modules['jqlib']
+        if 'jqfactor' in sys.modules:
+            module.jqfactor = sys.modules['jqfactor']
     
     def run(
         self,

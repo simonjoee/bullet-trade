@@ -380,19 +380,37 @@ class LocalProvider(DataProvider):
                     if not table_name:
                         continue
                     
-                    query = f"SELECT code, name, market FROM {table_name}"
+                    query = f"SELECT code, name, display_name, market, start_date, end_date, type, subtype, parent FROM {table_name}"
                     df = pd.read_sql_query(query, conn)
                     
                     for _, row in df.iterrows():
                         qmt_code = row["code"]
                         jq_code = self._to_jq_code(qmt_code)
+                        # 解析 start_date
+                        start_date = None
+                        if pd.notna(row.get("start_date")):
+                            try:
+                                start_date = pd.to_datetime(row.get("start_date"), errors="coerce")
+                            except Exception:
+                                pass
+                        # 解析 end_date
+                        end_date = None
+                        if pd.notna(row.get("end_date")):
+                            try:
+                                end_date = pd.to_datetime(row.get("end_date"), errors="coerce")
+                            except Exception:
+                                pass
+                        # 如果没有 end_date，设置为 2200-01-01
+                        if end_date is None or pd.isna(end_date):
+                            end_date = pd.to_datetime('2200-01-01')
+                        
                         rows.append({
                             "ts_code": jq_code,
-                            "display_name": row.get("name", qmt_code),
-                            "name": qmt_code.split(".", 1)[0] if "." in qmt_code else qmt_code,
-                            "start_date": None,  # 数据库中没有存储
-                            "end_date": None,
-                            "type": t,
+                            "display_name": row.get("display_name") or row.get("name", qmt_code),
+                            "name": row.get("name") or (qmt_code.split(".", 1)[0] if "." in qmt_code else qmt_code),
+                            "start_date": start_date,
+                            "end_date": end_date,
+                            "type": row.get("type") or t,
                         })
                 
                 if not rows:
@@ -436,18 +454,41 @@ class LocalProvider(DataProvider):
                 "etfs": "etf",
             }
             for table, sec_type in table_type_map.items():
-                query = f"SELECT code, name, market FROM {table} WHERE code = ?"
+                query = f"SELECT code, name, display_name, market, start_date, end_date, type, subtype, parent FROM {table} WHERE code = ?"
                 df = pd.read_sql_query(query, conn, params=[qmt_code])
                 if not df.empty:
                     row = df.iloc[0]
+                    # 解析 start_date
+                    start_date = None
+                    if pd.notna(row.get("start_date")):
+                        try:
+                            start_date = pd.to_datetime(row.get("start_date"), errors="coerce")
+                            if pd.notna(start_date):
+                                start_date = start_date.date()
+                        except Exception:
+                            pass
+                    # 解析 end_date
+                    end_date = None
+                    if pd.notna(row.get("end_date")):
+                        try:
+                            end_date = pd.to_datetime(row.get("end_date"), errors="coerce")
+                            if pd.notna(end_date):
+                                end_date = end_date.date()
+                        except Exception:
+                            pass
+                    # 如果没有 end_date，设置为 2200-01-01
+                    if end_date is None:
+                        from datetime import date as Date
+                        end_date = Date(2200, 1, 1)
+                    
                     return {
-                        "display_name": row.get("name", jq_code),
-                        "name": qmt_code.split(".", 1)[0] if "." in qmt_code else qmt_code,
-                        "start_date": None,
-                        "end_date": None,
-                        "type": sec_type,
-                        "subtype": None,
-                        "parent": None,
+                        "display_name": row.get("display_name") or row.get("name", jq_code),
+                        "name": row.get("name") or (qmt_code.split(".", 1)[0] if "." in qmt_code else qmt_code),
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "type": row.get("type") or sec_type,
+                        "subtype": row.get("subtype"),
+                        "parent": row.get("parent"),
                     }
             
             # 未找到，返回默认值
