@@ -1,19 +1,24 @@
-import sqlite3
+"""
+证券基本信息获取器
 
+负责从 QMT 获取股票、指数、ETF 的基本信息并保存到数据库
+"""
+
+import sqlite3
 import pandas as pd
 from xtquant import xtdata
 
 
-class DataFetcher:
+class SecurityInfoFetcher:
     def __init__(self, db_path=None):
         from pathlib import Path
         if db_path is None:
-            db_path = Path(__file__).parent.parent / "data" / "qmt_data.db"
+            db_path = Path(__file__).parent / "data" / "qmt_data.db"
         self.db_path = db_path
         self.init_database()
 
     def init_database(self):
-        """初始化数据库表结构"""
+        """初始化数据库表结构（仅基本信息表）"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -68,33 +73,9 @@ class DataFetcher:
             )
         ''')
 
-        # 创建日线数据表
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS daily_kline (
-                code TEXT NOT NULL,                 -- 股票代码
-                date TEXT NOT NULL,                 -- 日期
-                time INTEGER,                       -- 时间
-                open FLOAT,                         -- 开盘价
-                high FLOAT,                         -- 最高价
-                low FLOAT,                          -- 最低价
-                close FLOAT,                        -- 收盘价
-                volume FLOAT,                       -- 成交量
-                amount FLOAT,                       -- 成交额
-                openInterest FLOAT,                 -- 持仓量
-                preClose FLOAT,                     -- 前收盘价
-                suspendFlag INT,                    -- 停牌 1停牌，0 不停牌
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (code, date)
-            )
-        ''')
-
-        # 创建索引提高查询性能
-        # 单独为date创建索引以支持按日期查询的需求
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_kline(date)')
-
         conn.commit()
         conn.close()
-        print("数据库初始化完成")
+        print("证券基本信息表初始化完成")
 
     def _parse_instrument_info(self, info):
         """解析 QMT 的 instrument_detail 信息，返回标准化的字段"""
@@ -229,7 +210,7 @@ class DataFetcher:
         print("指数基本信息保存完成")
 
     def save_etf_info(self, symbols):
-        """保存指数基本信息到数据库"""
+        """保存ETF基本信息到数据库"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -266,100 +247,37 @@ class DataFetcher:
         print("ETF 基本信息保存完成")
 
     def fetch_and_save_stock_info(self):
-        """保存股票基本信息"""
+        """获取并保存股票基本信息"""
         stocks = xtdata.get_stock_list_in_sector('沪深A股')
         self.save_stock_info(stocks)
         return stocks
 
     def fetch_and_save_index_info(self):
-        """保存指数基本信息"""
+        """获取并保存指数基本信息"""
         indexes = xtdata.get_stock_list_in_sector('沪深指数')
         self.save_index_info(indexes)
         return indexes
 
     def fetch_and_save_etf_info(self):
-        """保存 ETF 基本信息"""
+        """获取并保存 ETF 基本信息"""
         etfs = xtdata.get_stock_list_in_sector('沪深ETF')
         self.save_etf_info(etfs)
         return etfs
 
-    def fetch_and_save_daily_data(self, symbols, start_date="", end_date=""):
-        """获取并保存日线数据"""
-        conn = sqlite3.connect(self.db_path)
-        success_count = 0
-        fails = []
-
-        for i, symbol in enumerate(symbols):
-            try:
-                # 下载日线数据
-                xtdata.download_history_data(symbol, period='1d', incrementally=True)
-
-                data = xtdata.get_market_data_ex(
-                    stock_list=[symbol],
-                    start_time=start_date,
-                    end_time=end_date,
-                    count=0,  # 获取所有数据
-                    dividend_type='front_ratio'
-                )
-
-                if data is None:
-                    fails.append(symbol)
-                    continue
-                    
-                df = pd.DataFrame(data[symbol])
-                if df.empty:
-                    fails.append(symbol)
-                    continue
-
-                # 添加股票代码列
-                df['code'] = symbol
-                # 重置索引，将时间作为列
-                df.reset_index(inplace=True)
-                df.rename(columns={'index': 'date'}, inplace=True)
-
-                # 插入数据库
-                for _, row in df.iterrows():
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO daily_kline 
-                        (code, date, time, open, high, low, close, volume, amount, openInterest, preClose, suspendFlag)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        row['code'], row['date'], 
-                        row['time'], 
-                        row['open'], row['high'],
-                        row['low'], row['close'], 
-                        row['volume'], row['amount'],
-                        row['openInterest'],
-                        row['preClose'], 
-                        row['suspendFlag']
-                    ))
-
-                success_count += 1
-                if success_count % 50 == 0:
-                    print(f"已处理 {success_count} 个标的")
-
-            except Exception as e:
-                fails.append(symbol)
-                print(f"处理 {symbol} 时出错: {e}")
-
-        conn.commit()
-        conn.close()
-        print(f"数据获取完成: 成功 {success_count} 个，失败 {len(fails)} 个")
-        print(f"失败symbols: {fails}")
 
 # 使用示例
 if __name__ == "__main__":
-    # 创建数据获取器实例
-    fetcher = DataFetcher()
+    # 创建证券信息获取器实例
+    fetcher = SecurityInfoFetcher()
 
-    #stock_list = fetcher.fetch_and_save_stock_info()
-    #fetcher.fetch_and_save_daily_data(stock_list, "20251101")
+    # 获取并保存股票信息
+    # stock_list = fetcher.fetch_and_save_stock_info()
 
-    #index_list = fetcher.fetch_and_save_index_info()
-    #fetcher.fetch_and_save_daily_data(index_list, "20251101")
+    # 获取并保存指数信息
+    # index_list = fetcher.fetch_and_save_index_info()
 
+    # 获取并保存ETF信息
     etf_list = fetcher.fetch_and_save_etf_info()
-    fetcher.fetch_and_save_daily_data(etf_list, "20001101")
 
-    print("数据获取任务完成")
+    print("证券基本信息获取任务完成")
+

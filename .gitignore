@@ -213,4 +213,4 @@ logs/*
 # Temp files
 results/
 .bullet-trade/
-data/
+localdata/data/

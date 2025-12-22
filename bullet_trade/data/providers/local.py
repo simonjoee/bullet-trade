@@ -33,7 +33,7 @@ class LocalProvider(DataProvider):
         # 数据库路径配置优先级：
         # 1. 代码参数（config 中的 db_path）
         # 2. 环境变量 LOCAL_DB_PATH
-        # 3. 默认路径：项目根目录下的 data/qmt_data.db
+        # 3. 默认路径：localdata/data/qmt_data.db（需要显式配置）
         db_path = (
             self.config.get("db_path") 
             or os.getenv("LOCAL_DB_PATH")
