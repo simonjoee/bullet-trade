@@ -12,7 +12,7 @@
 
 特点：
 - 每次调用都会重新建立 TCP 连接，适合聚宽频繁重启。
-- 自动补价：市价单会尝试读取 snapshot/1m K 线补全限价。
+- 服务端统一处理：100股取整、停牌检查、价格笼子、涨跌停校验、可卖数量检查。
 - 支持同步/异步：wait_timeout>0 时轮询订单状态，否则立即返回。
 - 提供 account/positions/order_status/orders/cancel/order_value/order_target 等常见聚宽风格 API。
 """
@@ -116,12 +116,36 @@ class RemoteDataClient:
 
 # --------- 券商客户端 ----------
 class RemoteOrder:
-    def __init__(self, order_id: str, status: str, security: str, amount: int, price: Optional[float] = None):
+    """
+    远程订单对象。
+    
+    属性：
+    - order_id: 订单ID
+    - status: 订单状态
+    - security: 证券代码
+    - amount: 请求数量
+    - price: 请求价格
+    - actual_amount: 服务端实际执行数量（可能因 100 股取整而不同）
+    - actual_price: 服务端实际委托价格（市价单会由服务端计算）
+    """
+    def __init__(
+        self,
+        order_id: str,
+        status: str,
+        security: str,
+        amount: int,
+        price: Optional[float] = None,
+        actual_amount: Optional[int] = None,
+        actual_price: Optional[float] = None,
+    ):
         self.order_id = order_id
         self.status = status
         self.security = security
         self.amount = amount
         self.price = price
+        # 服务端返回的实际执行数量和价格
+        self.actual_amount = actual_amount if actual_amount is not None else amount
+        self.actual_price = actual_price if actual_price is not None else price
 
 
 class RemotePosition:
@@ -168,35 +192,86 @@ class RemoteBrokerClient:
 
     # ----- 聚宽风格入口 -----
     def order(self, security: str, amount: int, price: Optional[float] = None, side: Optional[str] = None, wait_timeout: float = 0) -> str:
+        """
+        按数量下单。
+        
+        :param security: 证券代码
+        :param amount: 数量（正数买入，负数卖出；如果指定了 side 则取绝对值）
+        :param price: 委托价格，None 时服务端自动使用市价单
+        :param side: 方向 BUY/SELL，None 时根据 amount 正负判断
+        :param wait_timeout: 等待超时秒数，0 表示异步返回
+        :return: 订单 ID
+        
+        注意：服务端会自动处理 100 股取整、停牌检查、价格笼子等。
+        """
         if amount == 0:
             return ""
         actual_side = side or ("BUY" if amount > 0 else "SELL")
         qty = abs(int(amount))
+        # 服务端会自动处理 100 股取整
         order = self._place_order(security, qty, price, actual_side, wait_timeout=wait_timeout)
         return order.order_id
 
     def order_value(self, security: str, value: float, price: Optional[float] = None, wait_timeout: float = 0) -> str:
+        """
+        按市值下单。
+        
+        :param security: 证券代码
+        :param value: 目标市值（正数买入，负数卖出）
+        :param price: 委托价格，None 时服务端自动使用市价单
+        :param wait_timeout: 等待超时秒数，0 表示异步返回
+        :return: 订单 ID
+        
+        注意：服务端会自动处理 100 股取整，实际成交市值可能与请求略有偏差。
+        """
         if value == 0:
             return ""
+        # 获取参考价格用于计算数量
         p = price or self._infer_price(security)
         if not p:
             raise RuntimeError("无法获取价格，无法按市值下单")
-        qty = int(value / p)
+        # 计算大致数量，服务端会自动按 100 股取整
+        qty = int(abs(value) / p)
         side = "BUY" if value > 0 else "SELL"
-        order = self._place_order(security, abs(qty), price or p, side, wait_timeout=wait_timeout)
+        order = self._place_order(security, qty, price, side, wait_timeout=wait_timeout)
         return order.order_id
 
     def order_target(self, security: str, target: int, price: Optional[float] = None, wait_timeout: float = 0) -> str:
+        """
+        调仓到目标数量。
+        
+        :param security: 证券代码
+        :param target: 目标持仓数量
+        :param price: 委托价格，None 时服务端自动使用市价单
+        :param wait_timeout: 等待超时秒数，0 表示异步返回
+        :return: 订单 ID（如果不需要交易则返回空字符串）
+        
+        注意：建议 target 为 100 的整数倍，服务端会自动取整。
+        """
         current = self._current_amount(security)
         delta = target - current
+        if delta == 0:
+            return ""
         return self.order(security, delta, price=price, wait_timeout=wait_timeout)
 
     def order_target_value(self, security: str, target_value: float, price: Optional[float] = None, wait_timeout: float = 0) -> str:
+        """
+        调仓到目标市值。
+        
+        :param security: 证券代码
+        :param target_value: 目标持仓市值
+        :param price: 委托价格，None 时服务端自动使用市价单
+        :param wait_timeout: 等待超时秒数，0 表示异步返回
+        :return: 订单 ID（如果不需要交易则返回空字符串）
+        
+        注意：服务端会自动处理 100 股取整，实际市值可能与目标略有偏差。
+        """
         p = price or self._infer_price(security)
         if not p:
             raise RuntimeError("无法获取价格，无法按目标市值下单")
+        # 计算目标数量，服务端会自动按 100 股取整
         target_amount = int(target_value / p)
-        return self.order_target(security, target_amount, price=p, wait_timeout=wait_timeout)
+        return self.order_target(security, target_amount, price=price, wait_timeout=wait_timeout)
 
     # ----- 基础接口 -----
     def get_account(self) -> RemoteAccount:
@@ -258,42 +333,56 @@ class RemoteBrokerClient:
 
     # ----- 内部 -----
     def _place_order(self, security: str, amount: int, price: Optional[float], side: str, wait_timeout: float) -> RemoteOrder:
+        """
+        发送下单请求到服务端。
+        
+        服务端会统一处理：
+        - 100 股取整
+        - 停牌检查
+        - 市价单价格笼子计算
+        - 限价单涨跌停校验
+        - 卖出可卖数量检查
+        """
         payload = self._base_payload()
-        style = {"type": "limit"}
-        market_flag = False
+        
+        # 简化价格处理：price=None 表示市价单，服务端会自动计算价格笼子
         if price is None:
-            price = self._infer_price(security)
-            market_flag = True
-            if price is not None:
-                style = {"type": "market", "protect_price": price}
-            else:
-                style = {"type": "market"}
-        if price is not None and not market_flag:
-            style["price"] = price
-        payload.update(
-            {
-                "security": security,
-                "side": side,
-                "amount": amount,
-                "style": style,
-            }
-        )
+            style = {"type": "market"}
+        else:
+            style = {"type": "limit", "price": float(price)}
+        
+        payload.update({
+            "security": security,
+            "side": side,
+            "amount": amount,
+            "style": style,
+        })
+        
         resp = self._client.request("broker.place_order", payload)
-        warning = None
-        try:
-            if isinstance(resp, dict):
-                warning = resp.get("warning")
-        except Exception:
-            warning = None
+        
+        # 处理服务端警告
+        warning = resp.get("warning") if isinstance(resp, dict) else None
         if warning:
             print(f"[远程警告] {warning}")
+        
+        # 服务端返回实际执行的数量和价格（可能因取整/价格笼子而不同）
+        actual_amount = resp.get("amount") if isinstance(resp, dict) else None
+        actual_price = resp.get("price") if isinstance(resp, dict) else None
+        
+        # 如果服务端返回了不同的数量，提示用户
+        if actual_amount is not None and actual_amount != amount:
+            print(f"[信息] {security} 数量已从 {amount} 调整为 {actual_amount}（100股取整）")
+        
         order = RemoteOrder(
-            order_id=resp.get("order_id"),
-            status=resp.get("status", "submitted"),
+            order_id=resp.get("order_id") if isinstance(resp, dict) else None,
+            status=resp.get("status", "submitted") if isinstance(resp, dict) else "submitted",
             security=security,
             amount=amount,
             price=price,
+            actual_amount=actual_amount,
+            actual_price=actual_price,
         )
+        
         if wait_timeout and order.order_id:
             self._wait_order(order.order_id, wait_timeout)
         return order

@@ -190,12 +190,28 @@ class QmtDataAdapter(RemoteDataAdapter):
 
 
 class QmtBrokerAdapter(RemoteBrokerAdapter):
+    """
+    QMT 券商适配器，处理远程下单请求。
+    
+    下单时会进行以下预处理（与 LiveEngine 行为一致）：
+    - 100 股取整（A 股规则）
+    - 停牌检查
+    - 涨跌停价格校验
+    - 市价单价格笼子计算
+    - 卖出时可卖数量检查
+    """
+    
     def __init__(self, config: ServerConfig, account_router: AccountRouter):
         self.config = config
         self.account_router = account_router
         self._brokers: Dict[str, QmtBroker] = {}
+        # 用于获取实时行情的 provider
+        self._data_provider: Optional[MiniQMTProvider] = None
 
     async def start(self) -> None:
+        # 初始化数据 provider 用于获取实时行情
+        self._data_provider = MiniQMTProvider(_provider_config())
+        
         for ctx in self.account_router.list_accounts():
             broker = QmtBroker(
                 account_id=ctx.config.account_id,
@@ -251,25 +267,139 @@ class QmtBrokerAdapter(RemoteBrokerAdapter):
         return status or {}
 
     async def place_order(self, account: AccountContext, payload: Dict) -> Dict:
+        """
+        下单接口，统一处理以下逻辑（与 LiveEngine 行为一致）：
+        1. 获取实时行情（停牌检查、最新价、涨跌停价）
+        2. 100 股取整
+        3. 价格校验（限价单在涨跌停范围内）
+        4. 市价单价格笼子计算
+        5. 卖出时可卖数量检查
+        """
+        import logging
+        from bullet_trade.core import pricing
+        from bullet_trade.utils.env_loader import get_live_trade_config
+        
+        logger = logging.getLogger(__name__)
         broker = self._broker_for(account)
         security = payload["security"]
-        amount = int(payload.get("amount") or payload.get("volume") or 0)
+        raw_amount = int(payload.get("amount") or payload.get("volume") or 0)
         side = payload.get("side", "BUY").upper()
         style = payload.get("style") or {"type": "limit"}
         style_type = (style.get("type") or "limit").lower()
-        price = style.get("price")
-        market_flag = style_type == "market"
-        if market_flag and price is None:
-            price = style.get("protect_price") or payload.get("reference_price")
-        if not market_flag and price is None:
-            raise ValueError("缺少委托价格，请在 style.price 中提供")
-        if side == "BUY":
-            order = await broker.buy(security, amount, price, wait_timeout=payload.get("wait_timeout"), market=market_flag)
+        is_market = style_type == "market"
+        is_buy = side == "BUY"
+        
+        # ========== 1. 获取实时行情 ==========
+        snapshot = await self._get_live_snapshot(security)
+        last_price = float(snapshot.get("last_price") or 0.0)
+        high_limit = snapshot.get("high_limit")
+        low_limit = snapshot.get("low_limit")
+        paused = snapshot.get("paused", False)
+        
+        # 停牌检查
+        if paused:
+            raise ValueError(f"{security} 停牌，无法下单")
+        
+        # 如果没有获取到价格，尝试用涨跌停价格
+        if last_price <= 0:
+            fallback = high_limit if is_buy else low_limit
+            if fallback and fallback > 0:
+                last_price = float(fallback)
+                logger.warning(f"{security} 缺少最新价，使用{'涨停价' if is_buy else '跌停价'} {last_price} 作为参考")
+            else:
+                raise ValueError(f"{security} 无法获取有效价格")
+        
+        # ========== 2. 100 股取整 ==========
+        lot_size = pricing.infer_lot_size(security)
+        if lot_size > 1:
+            amount = (raw_amount // lot_size) * lot_size
+            if amount != raw_amount:
+                logger.info(f"{security} 数量从 {raw_amount} 取整为 {amount}（手数={lot_size}）")
         else:
-            order = await broker.sell(security, amount, price, wait_timeout=payload.get("wait_timeout"), market=market_flag)
+            amount = raw_amount
+        
+        if amount <= 0:
+            raise ValueError(f"{security} 数量不足一手（原始数量={raw_amount}，手数={lot_size}）")
+        
+        # ========== 3. 卖出时可卖数量检查 ==========
+        if not is_buy:
+            positions = await self.get_positions(account)
+            closeable = 0
+            for pos in positions:
+                if pos.get("security") == security:
+                    closeable = int(pos.get("closeable_amount") or pos.get("available") or pos.get("amount") or 0)
+                    break
+            if closeable <= 0:
+                raise ValueError(f"{security} 无可卖数量")
+            if amount > closeable:
+                logger.warning(f"{security} 可卖数量 {closeable} 小于委托数量 {amount}，调整为 {closeable}")
+                amount = closeable
+        
+        # ========== 4. 价格处理 ==========
+        price = style.get("price")
+        
+        if is_market:
+            # 市价单：服务端统一计算价格笼子，忽略客户端传入的 protect_price
+            live_cfg = get_live_trade_config()
+            buy_percent = float(live_cfg.get("market_buy_price_percent", 0.015))
+            sell_percent = float(live_cfg.get("market_sell_price_percent", -0.015))
+            percent = buy_percent if is_buy else sell_percent
+            
+            price = pricing.compute_market_protect_price(
+                security,
+                last_price,
+                high_limit,
+                low_limit,
+                percent,
+                is_buy,
+            )
+            logger.info(f"{security} 市价单保护价: {price:.4f}（基准价={last_price:.4f}, 比例={percent*100:.2f}%）")
+        else:
+            # 限价单：校验价格是否在涨跌停范围内
+            if price is None:
+                raise ValueError("限价单缺少委托价格，请在 style.price 中提供")
+            price = float(price)
+            
+            # 涨跌停校验
+            if high_limit and price > float(high_limit):
+                logger.warning(f"{security} 限价 {price} 超过涨停价 {high_limit}，调整为涨停价")
+                price = float(high_limit)
+            if low_limit and price < float(low_limit):
+                logger.warning(f"{security} 限价 {price} 低于跌停价 {low_limit}，调整为跌停价")
+                price = float(low_limit)
+        
+        # ========== 5. 下单 ==========
+        logger.info(f"执行下单: {security} {'买入' if is_buy else '卖出'} {amount} 股，价格={price:.4f}，市价单={is_market}")
+        
+        if is_buy:
+            order = await broker.buy(security, amount, price, wait_timeout=payload.get("wait_timeout"), market=is_market)
+        else:
+            order = await broker.sell(security, amount, price, wait_timeout=payload.get("wait_timeout"), market=is_market)
+        
         if isinstance(order, str):
-            return {"order_id": order}
-        return order or {}
+            return {"order_id": order, "amount": amount, "price": price}
+        result = order or {}
+        result["amount"] = amount
+        result["price"] = price
+        return result
+    
+    async def _get_live_snapshot(self, security: str) -> Dict[str, Any]:
+        """
+        获取实时行情快照，包含 last_price, high_limit, low_limit, paused 等字段。
+        """
+        if not self._data_provider:
+            return {}
+        
+        def _call():
+            return self._data_provider.get_live_current(security)
+        
+        try:
+            snapshot = await asyncio.to_thread(_call)
+            return snapshot or {}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"获取 {security} 实时行情失败: {e}")
+            return {}
 
     async def cancel_order(
         self, account: AccountContext, order_id: Optional[str] = None, payload: Optional[Dict] = None
