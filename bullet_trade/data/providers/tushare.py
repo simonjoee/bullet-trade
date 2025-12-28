@@ -258,27 +258,28 @@ class TushareProvider(DataProvider):
         if factor_df.empty or "adj_factor" not in factor_df.columns:
             return df
 
-        factor_df.index = pd.to_datetime(factor_df["trade_date"])
+        factor_df.index = pd.to_datetime(factor_df["trade_date"]).dt.normalize()
         merged = df.join(factor_df["adj_factor"], how="left")
         merged["adj_factor"] = merged["adj_factor"].ffill().bfill()
         ref_date = pre_factor_ref_date
         if ref_date is None and fq == "pre":
-            ref_date = Date.today()
+            latest_trade_day = self._latest_trade_day()
+            ref_date = latest_trade_day or Date.today()
         if ref_date is None:
             ref_date = end_dt if fq == "pre" else start_dt
         try:
             ref_dt = pd.to_datetime(ref_date).normalize()
         except Exception:
-            ref_dt = end_dt if fq == "pre" else start_dt
+            ref_dt = pd.to_datetime(end_dt if fq == "pre" else start_dt).normalize()
         ref_factor = None
         if ref_dt is not None:
-            if ref_dt in merged.index:
-                ref_factor = merged.loc[ref_dt, "adj_factor"]
+            if ref_dt in factor_df.index:
+                ref_factor = factor_df.loc[ref_dt, "adj_factor"]
             else:
                 extra_df = self._fetch_adj_factor(security, ref_dt, ref_dt)
                 if not extra_df.empty and "adj_factor" in extra_df.columns:
                     ref_factor = extra_df["adj_factor"].iloc[-1]
-        if ref_factor is None:
+        if ref_factor is None or (isinstance(ref_factor, float) and pd.isna(ref_factor)):
             ref_factor = merged["adj_factor"].iloc[-1] if fq == "pre" else merged["adj_factor"].iloc[0]
         if fq == "pre":
             ratio = merged["adj_factor"] / ref_factor
@@ -291,6 +292,15 @@ class TushareProvider(DataProvider):
 
         merged.drop(columns=["adj_factor"], inplace=True, errors="ignore")
         return merged
+
+    def _latest_trade_day(self) -> Optional[datetime]:
+        try:
+            days = self.get_trade_days(end_date=Date.today(), count=1)
+            if days:
+                return pd.to_datetime(days[-1])
+        except Exception:
+            return None
+        return None
 
     def _fetch_adj_factor(self, security: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
         kwargs = {

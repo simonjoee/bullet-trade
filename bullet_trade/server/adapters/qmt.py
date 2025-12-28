@@ -447,12 +447,38 @@ class QmtBrokerAdapter(RemoteBrokerAdapter):
 def dataframe_to_payload(df):
     if df is None:
         return {"dtype": "dataframe", "columns": [], "records": []}
+    def _coerce_value(value):
+        if value is None:
+            return None
+        try:
+            import pandas as pd
+            if value is pd.NaT:
+                return None
+            if isinstance(value, pd.Timestamp):
+                return value.isoformat()
+        except Exception:
+            pass
+        try:
+            from datetime import datetime, date as Date
+            if isinstance(value, (datetime, Date)):
+                return value.isoformat()
+        except Exception:
+            pass
+        try:
+            if hasattr(value, "item"):
+                return value.item()
+        except Exception:
+            pass
+        return value
+
     try:
         columns = list(df.columns)
-        records = df.reset_index().values.tolist() if df.index.name else df.values.tolist()
+        raw = df.reset_index().values.tolist() if df.index.name else df.values.tolist()
+        records = [[_coerce_value(v) for v in row] for row in raw]
     except Exception:
         columns = getattr(df, "columns", [])
-        records = getattr(df, "values", [])
+        raw = getattr(df, "values", [])
+        records = [[_coerce_value(v) for v in row] for row in raw]
     return {
         "dtype": "dataframe",
         "columns": [str(col) for col in columns],
