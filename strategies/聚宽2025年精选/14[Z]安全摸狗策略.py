@@ -1,3 +1,5 @@
+# ZZ：简单可执行
+
 # 克隆自聚宽文章：https://www.joinquant.com/post/49263
 # 标题：安全摸狗策略
 # 作者：MarioC
