@@ -209,3 +209,4 @@ logs/*
 
 # Project
 backtest_results/
+results
