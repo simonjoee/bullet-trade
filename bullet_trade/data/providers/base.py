@@ -71,6 +71,18 @@ class DataProvider(ABC):
     ) -> List[Dict[str, Any]]:
         pass
 
+    def __getattr__(self, name: str):
+        """
+        当 provider 缺少某方法时，允许回退到同一 provider 的 SDK/客户端。
+        """
+        try:
+            resolver = object.__getattribute__(self, "_sdk_fallback")
+        except AttributeError:
+            resolver = None
+        if callable(resolver):
+            return resolver(name)
+        raise AttributeError(name)
+
     def get_security_info(
         self,
         security: str,

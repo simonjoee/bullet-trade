@@ -4,7 +4,8 @@
 包装多数据源的函数，避免未来函数，确保回测准确性
 """
 
-from typing import Union, List, Optional, Dict, Any
+from typing import Union, List, Optional, Dict, Any, Callable
+import importlib
 from datetime import datetime, timedelta, date as Date, time as Time
 import pandas as pd
 import re
@@ -28,13 +29,33 @@ from .providers.base import DataProvider
 # 记录是否已在实盘强制关缓存并提醒过
 _cache_forced_off_warned = False
 
+# 按名称缓存 provider 实例与认证状态，避免重复初始化/认证
+_provider_cache: Dict[str, DataProvider] = {}
+_provider_auth_attempted: Dict[str, bool] = {}
+
+
+def _normalize_provider_name(name: Optional[str]) -> str:
+    """
+    规范化 provider 名称（用于缓存键与回退映射）。
+    """
+    if not name:
+        return ""
+    lowered = name.lower()
+    if lowered in ("jqdata", "jqdatasdk"):
+        return "jqdata"
+    if lowered in ("qmt", "miniqmt"):
+        return "miniqmt"
+    if lowered in ("qmt-remote", "remote-qmt", "remote_qmt"):
+        return "remote_qmt"
+    return lowered
+
 
 def _create_provider(provider_name: Optional[str] = None, overrides: Optional[Dict[str, Any]] = None) -> DataProvider:
     """
     根据名称创建数据提供者实例，支持读取环境配置并按需覆盖参数。
     """
     config = get_data_provider_config()
-    target = (provider_name or config.get('default') or 'jqdata').lower()
+    target = _normalize_provider_name(provider_name or config.get('default') or 'jqdata')
     overrides = overrides or {}
 
     if target == 'jqdata':
@@ -61,14 +82,6 @@ def _create_provider(provider_name: Optional[str] = None, overrides: Optional[Di
     raise ValueError(f"未知的数据提供者: {provider_name}")
 
 
-_provider: DataProvider = _create_provider()
-_auth_attempted = False
-_security_info_cache: Dict[Any, "SecurityInfo"] = {}
-_security_overrides_loaded = False
-_security_overrides: Dict[str, Any] = {}
-
-
-class SecurityInfo(dict):
     """兼容聚宽风格的证券信息对象，既支持属性访问也保留字典语义。"""
 
     __slots__ = ("code",)
@@ -113,11 +126,153 @@ def _ensure_auth():
         try:
             _provider.auth()
             _auth_attempted = True
+            _provider_auth_attempted[_normalize_provider_name(getattr(_provider, "name", None))] = True
         except Exception as e:
             # 认证失败，但不设置 _auth_attempted = True
             # 这样下次调用时还会重试
             print(f"数据源认证失败: {e}")
             # 不设置 _auth_attempted，允许重试
+
+
+def _ensure_auth_for(provider: DataProvider, provider_name: str, *, raise_on_fail: bool = False) -> None:
+    """
+    确保指定 provider 已认证，按名称跟踪认证状态。
+    """
+    name = _normalize_provider_name(provider_name or getattr(provider, "name", ""))
+    attempted = _provider_auth_attempted.get(name, False)
+    if attempted:
+        return
+    try:
+        provider.auth()
+        _provider_auth_attempted[name] = True
+        if provider is _provider:
+            # 同步全局默认数据源的认证标记
+            globals()["_auth_attempted"] = True
+    except Exception as exc:
+        message = f"{name} 数据源认证失败: {exc}"
+        if raise_on_fail:
+            raise RuntimeError(message) from exc
+        print(message)
+
+
+def _sdk_fallback_targets(provider_name: str, provider: DataProvider, method_name: str) -> Callable[..., Any]:
+    """
+    返回一个可调用对象，用于在 provider 缺少某方法时回退到对应 SDK/客户端。
+    不存在可用回退时抛出 AttributeError。
+    """
+    normalized = _normalize_provider_name(provider_name or getattr(provider, "name", ""))
+    attempts: List[str] = []
+    errors: List[str] = []
+
+    def _lazy_import(module_path: str) -> Optional[Any]:
+        try:
+            module = importlib.import_module(module_path)
+            attempts.append(module_path)
+            return module
+        except Exception as exc:
+            errors.append(f"{module_path} 导入失败: {exc}")
+            return None
+
+    def _get_from(obj: Any, label: str) -> Optional[Callable[..., Any]]:
+        if obj is None:
+            return None
+        attempts.append(label)
+        return getattr(obj, method_name, None)
+
+    if normalized == "jqdata":
+        mod = _lazy_import("jqdatasdk")
+        if mod:
+            target = getattr(mod, method_name, None)
+            if target:
+                return target
+    elif normalized == "tushare":
+        client = None
+        ensure_client = getattr(provider, "_ensure_client", None)
+        if callable(ensure_client):
+            try:
+                client = ensure_client()
+            except Exception as exc:
+                errors.append(f"tushare.pro_api() 初始化失败: {exc}")
+        candidate = _get_from(client, "tushare.pro_api()")
+        if candidate:
+            return candidate
+        mod = _lazy_import("tushare")
+        if mod:
+            target = getattr(mod, method_name, None)
+            if target:
+                return target
+    elif normalized in ("miniqmt",):
+        mod = _lazy_import("xtquant.xtdata")
+        if mod:
+            target = getattr(mod, method_name, None)
+            if target:
+                return target
+    elif normalized == "remote_qmt":
+        raise AttributeError(f"{normalized} 未实现 {method_name}，且无可用的 SDK 回退路径")
+
+    detail = "; ".join(attempts + errors) if (attempts or errors) else "无可用回退"
+    raise AttributeError(f"{normalized} 未实现 {method_name}，已尝试回退到同名 provider 的 SDK/客户端: {detail}")
+
+
+def _bind_sdk_fallback(provider: DataProvider, provider_name: str) -> None:
+    """
+    为 provider 绑定 SDK 回退解析器（仅同一 provider，不跨数据源）。
+    """
+    if getattr(provider, "_sdk_fallback", None):
+        return
+
+    def _resolver(method_name: str) -> Callable[..., Any]:
+        return _sdk_fallback_targets(provider_name, provider, method_name)
+
+    setattr(provider, "_sdk_fallback", _resolver)
+
+
+_provider: DataProvider = _create_provider()
+_bind_sdk_fallback(_provider, _normalize_provider_name(getattr(_provider, "name", None)))
+_provider_cache[_normalize_provider_name(getattr(_provider, "name", None))] = _provider
+_auth_attempted = False
+_security_info_cache: Dict[Any, "SecurityInfo"] = {}
+_security_overrides_loaded = False
+_security_overrides: Dict[str, Any] = {}
+
+
+class SecurityInfo(dict):
+    """兼容聚宽风格的证券信息对象，既支持属性访问也保留字典语义。"""
+
+    __slots__ = ("code",)
+
+    def __init__(self, code: str, data: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        object.__setattr__(self, "code", code)
+        if data:
+            for key, value in data.items():
+                if value is not None:
+                    super().__setitem__(key, value)
+
+        # 为常用字段设置默认值，避免属性访问时抛异常
+        for key in ("display_name", "name", "start_date", "end_date", "type", "subtype", "parent"):
+            self.setdefault(key, None)
+
+    def __getattr__(self, item: str) -> Any:
+        # 未提供的字段返回 None，贴近聚宽 SDK 的容错行为
+        return self.get(item, None)
+
+    def __setattr__(self, key: str, value: Any) -> None:
+        if key == "code":
+            object.__setattr__(self, key, value)
+        else:
+            self[key] = value
+
+    def __delattr__(self, item: str) -> None:
+        if item == "code":
+            raise AttributeError("code 字段不可删除")
+        try:
+            del self[item]
+        except KeyError as exc:
+            raise AttributeError(item) from exc
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dict(self)
 
 def set_data_provider(provider: Union[DataProvider, str], **provider_kwargs) -> None:
     """
@@ -130,6 +285,10 @@ def set_data_provider(provider: Union[DataProvider, str], **provider_kwargs) -> 
     else:
         _provider = _create_provider(provider_name=provider, overrides=provider_kwargs)
 
+    normalized = _normalize_provider_name(getattr(_provider, "name", None))
+    _bind_sdk_fallback(_provider, normalized)
+    _provider_cache[normalized] = _provider
+    _provider_auth_attempted[normalized] = False
     _auth_attempted = False
     _security_info_cache = {}
     _cache_forced_off_warned = False
@@ -147,15 +306,36 @@ def reload_data_provider_from_env(provider_name: Optional[str] = None) -> None:
     """
     global _provider, _auth_attempted, _security_info_cache, _cache_forced_off_warned
     _provider = _create_provider(provider_name=provider_name, overrides=None)
+    normalized = _normalize_provider_name(getattr(_provider, "name", None))
+    _bind_sdk_fallback(_provider, normalized)
+    _provider_cache[normalized] = _provider
+    _provider_auth_attempted[normalized] = False
     _auth_attempted = False
     _security_info_cache = {}
     _cache_forced_off_warned = False
 
-def get_data_provider() -> DataProvider:
-    """获取当前数据提供者（若未认证则触发一次认证）"""
-    _maybe_disable_cache_for_live()
-    _ensure_auth()
-    return _provider
+def get_data_provider(provider_name: Optional[str] = None) -> DataProvider:
+    """
+    获取指定数据提供者实例（若未认证则触发一次认证）。
+    - 不传 provider_name：返回全局默认数据源。
+    - 传入 provider_name：按名称缓存并返回对应实例，不修改全局默认。
+    """
+    if provider_name is None:
+        _maybe_disable_cache_for_live()
+        _ensure_auth()
+        _bind_sdk_fallback(_provider, _normalize_provider_name(getattr(_provider, "name", None)))
+        return _provider
+
+    normalized = _normalize_provider_name(provider_name)
+    provider = _provider_cache.get(normalized)
+    if provider is None:
+        provider = _create_provider(provider_name=normalized, overrides=None)
+        _provider_cache[normalized] = provider
+        _provider_auth_attempted[normalized] = False
+
+    _bind_sdk_fallback(provider, normalized)
+    _ensure_auth_for(provider, normalized, raise_on_fail=True)
+    return provider
 
 
 def set_current_context(context):

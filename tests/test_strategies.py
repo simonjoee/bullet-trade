@@ -208,6 +208,18 @@ def test_strategy(strategy_name: str, strategy_path: Path):
             import jqdatasdk  # noqa: F401
         except Exception:
             pytest.skip("未安装 jqdatasdk，跳过 data_api_temporal_guards")
+    if strategy_name == "strategy_small_cap_direct_provider_access":
+        load_env()
+        if not os.getenv("JQDATA_USERNAME") or not os.getenv("JQDATA_PASSWORD"):
+            pytest.skip("缺少 JQDATA_USERNAME/JQDATA_PASSWORD，跳过直连示例")
+        try:
+            import jqdatasdk  # noqa: F401
+        except Exception:
+            pytest.skip("未安装 jqdatasdk，跳过直连示例")
+        try:
+            from xtquant import xtdata  # noqa: F401
+        except Exception:
+            pytest.skip("缺少 miniQMT/xtquant 环境，跳过直连示例")
 
     # 加载策略模块前确保 jqdata 仍指向本地兼容模块（防止被其他测试污染）
     _local_jq_path = (project_root / "jqdata.py").resolve()

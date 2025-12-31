@@ -67,3 +67,10 @@ live_order_showcase:
   capital_base: 100000                                                                                                                                                                                                                                                                    
   frequency: 'daily'                                                                                                                                                                                                                                                                      
   benchmark: '000300.XSHG' 
+
+strategy_small_cap_direct_provider_access:
+  start_date: '2025-11-25'
+  end_date: '2025-11-25'
+  capital_base: 100000
+  frequency: 'daily'
+  benchmark: '000300.XSHG'

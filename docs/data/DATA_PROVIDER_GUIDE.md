@@ -171,6 +171,12 @@ set_data_provider('qmt')
 set_data_provider('tushare')
 ```
 
+## 🎯 直接访问特有接口
+
+需要调用某数据源的原生/特有方法（如 `get_is_st`）时，可通过 `get_data_provider("jqdata")` 直接拿到实例，默认数据源保持不变。缺失方法会按“同一数据源”的 SDK 回退，不会跨数据源。详见《DATA_PROVIDER_DIRECT_ACCESS.md》。
+
+⚠️ 直连会降低跨数据源可移植性，策略迁移时需自行处理兼容或降级。
+
 ## ✅ 数据源对比测试
 
 用于验证不同 provider 的复权口径与数据一致性，建议在准备好账号与本地数据后执行：
@@ -252,3 +258,4 @@ QMT_DATA_PATH=C:\国金QMT交易端模拟\userdata_mini
 - [聚宽数据](DATA_PROVIDER_JQDATA.md)
 - [MiniQMT 数据](DATA_PROVIDER_MINIQMT.md)
 - [Tushare 数据](DATA_PROVIDER_TUSHARE.md)
+- [按名称直接访问数据提供者](DATA_PROVIDER_DIRECT_ACCESS.md)
