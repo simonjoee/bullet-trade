@@ -164,7 +164,7 @@ def _build_context(
 
     summary_rows = _build_summary_rows(df, results.get("meta") or meta or {})
     metric_rows = _build_metric_rows(metrics, metrics_keys)
-    charts = _build_chart_images(df)
+    charts = _build_chart_images(df, benchmark_data=results.get("benchmark_data"))
 
     context_title = title or meta.get("title") if meta else None
     if not context_title:
@@ -225,21 +225,44 @@ def _build_metric_rows(
     return rows
 
 
-def _build_chart_images(df: pd.DataFrame) -> Dict[str, Optional[str]]:
+def _build_chart_images(df: pd.DataFrame, benchmark_data=None) -> Dict[str, Optional[str]]:
     charts: Dict[str, Optional[str]] = {"equity": None, "drawdown": None, "monthly_heatmap": None}
     if df.empty:
         return charts
 
-    charts["equity"] = _figure_to_data_url(_build_equity_figure(df))
+    charts["equity"] = _figure_to_data_url(_build_equity_figure(df, benchmark_data=benchmark_data))
     charts["drawdown"] = _figure_to_data_url(_build_drawdown_figure(df))
     charts["monthly_heatmap"] = _figure_to_data_url(_build_monthly_heatmap_figure(df))
     return charts
 
 
-def _build_equity_figure(df: pd.DataFrame):
+def _build_equity_figure(df: pd.DataFrame, benchmark_data=None):
     fig, ax = plt.subplots(figsize=(10, 4))
     base = float(df["total_value"].iloc[0])
-    ax.plot(df.index, df["total_value"], color="#1f77b4", linewidth=2)
+    ax.plot(df.index, df["total_value"], color="#1f77b4", linewidth=2, label="策略净值")
+    
+    # 添加 benchmark 曲线
+    if benchmark_data is not None and not benchmark_data.empty:
+        try:
+            if isinstance(benchmark_data, pd.DataFrame):
+                if 'close' in benchmark_data.columns:
+                    benchmark_close = benchmark_data['close']
+                else:
+                    benchmark_close = benchmark_data.iloc[:, 0]
+                
+                # 对齐日期索引
+                benchmark_aligned = benchmark_close.reindex(df.index, method='ffill')
+                
+                # 计算基准净值（归一化到策略初始资金）
+                if len(benchmark_aligned) > 0 and not benchmark_aligned.isna().all():
+                    benchmark_start = float(benchmark_aligned.iloc[0])
+                    strategy_start = float(df["total_value"].iloc[0])
+                    if benchmark_start > 0:
+                        benchmark_normalized = benchmark_aligned / benchmark_start * strategy_start
+                        ax.plot(df.index, benchmark_normalized, color="red", linewidth=2, label="基准净值")
+        except Exception:
+            pass
+    
     ax.set_title("账户净值曲线", fontsize=12)
     ax.set_ylabel("总资产 (元)")
     ax.grid(True, alpha=0.3)

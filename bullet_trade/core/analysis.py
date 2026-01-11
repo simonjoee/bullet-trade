@@ -87,6 +87,31 @@ def plot_results(results: Dict[str, Any], save_path: str = None, show_plots: boo
     # 1. 资产曲线
     ax1 = axes[0]
     ax1.plot(df.index, df['total_value'], label='策略净值', linewidth=2, color='#1f77b4')
+    
+    # 添加 benchmark 曲线
+    benchmark_data = results.get('benchmark_data')
+    if benchmark_data is not None and not benchmark_data.empty:
+        try:
+            # 获取基准收盘价
+            if isinstance(benchmark_data, pd.DataFrame):
+                if 'close' in benchmark_data.columns:
+                    benchmark_close = benchmark_data['close']
+                else:
+                    benchmark_close = benchmark_data.iloc[:, 0]
+                
+                # 对齐日期索引
+                benchmark_aligned = benchmark_close.reindex(df.index, method='ffill')
+                
+                # 计算基准净值（归一化到策略初始资金）
+                if len(benchmark_aligned) > 0 and not benchmark_aligned.isna().all():
+                    benchmark_start = float(benchmark_aligned.iloc[0])
+                    strategy_start = float(df['total_value'].iloc[0])
+                    if benchmark_start > 0:
+                        benchmark_normalized = benchmark_aligned / benchmark_start * strategy_start
+                        ax1.plot(df.index, benchmark_normalized, label='基准净值', linewidth=2, color='red')
+        except Exception as e:
+            log.warning(f"绘制基准曲线失败: {e}")
+    
     ax1.axhline(y=float(str(results['summary']['初始资金']).replace(',', '')), 
                 color='red', linestyle='--', alpha=0.5, label='初始资金')
     # 1.1 回撤（右轴）合并到净值图
@@ -1521,6 +1546,39 @@ def generate_html_report(results: Dict[str, Any] = None, output_file: Optional[s
         ),
         secondary_y=False
     )
+    
+    # 添加 benchmark 曲线
+    benchmark_data = results.get('benchmark_data')
+    if benchmark_data is not None and not benchmark_data.empty:
+        try:
+            if isinstance(benchmark_data, pd.DataFrame):
+                if 'close' in benchmark_data.columns:
+                    benchmark_close = benchmark_data['close']
+                else:
+                    benchmark_close = benchmark_data.iloc[:, 0]
+                
+                # 对齐日期索引
+                benchmark_aligned = benchmark_close.reindex(df.index, method='ffill')
+                
+                # 计算基准净值（归一化到策略初始资金）
+                if len(benchmark_aligned) > 0 and not benchmark_aligned.isna().all():
+                    benchmark_start = float(benchmark_aligned.iloc[0])
+                    strategy_start = float(df['total_value'].iloc[0])
+                    if benchmark_start > 0:
+                        benchmark_normalized = benchmark_aligned / benchmark_start * strategy_start
+                        fig_total.add_trace(
+                            go.Scatter(
+                                x=df.index,
+                                y=benchmark_normalized,
+                                mode='lines',
+                                name='基准净值',
+                                line=dict(color='red', width=2)
+                            ),
+                            secondary_y=False
+                        )
+        except Exception as e:
+            log.warning(f"绘制基准曲线失败: {e}")
+    
     # 初始资金（用首日总资产作为近似）
     if len(df) > 0:
         init_cash = float(df['total_value'].iloc[0])

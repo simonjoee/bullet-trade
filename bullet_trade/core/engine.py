@@ -1926,6 +1926,7 @@ class BacktestEngine:
             'events': self.events,
             'daily_positions': pd.DataFrame(self.daily_positions) if self.daily_positions else pd.DataFrame(columns=['date','code','amount','closeable_amount','avg_cost','acc_avg_cost','price','value']),
             'custom_plot': custom_plot_obj,
+            'benchmark_data': self.benchmark_data,
             'meta': {
                 'strategy_file': self.strategy_file,
                 'start_date': self.start_date.strftime('%Y-%m-%d'),
