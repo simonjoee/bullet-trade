@@ -24,6 +24,12 @@ BulletTrade 提供 `bullet-trade lab`/`bullet-trade jupyterlab` 一键启动研�
 欢迎样例ipynb
 ![welcome](assets/jupyter-welcome.png)
 
+## 因子研究（通用管线）
+- 位置：`bullet_trade.research.factors` 提供因子管线（`run_factor_pipeline`）、评估与向量化回测（`evaluate_factor_performance`）、结果存储（`save_results`）。
+- 典型流程：准备 DataFrame（`date/code/close/...` + 自定义因子函数）→ 过滤（停牌/涨跌停/ST/次新/到期日等）→ 因子去极值/标准化/中性化 → 多因子加权得分 → 分桶/IC/RankIC/长多/多空回测 → 结果落地 CSV/Parquet/SQLite。
+- 成本模型：佣金/印花税/滑点 + 每笔固定费（可转债流量费等），在评估时统一扣减。
+- 示例：`research/convertible_factor_example.py` 展示可转债溢价/双低因子从管线到评估的完整链路，结果默认写入研究目录下的 `results/`。
+
 ## 研究文件读写（兼容聚宽）
 - 路径：`read_file(path)` / `write_file(path, content, append=False)` 的 `path` 需为研究根目录的相对路径，根目录来源于 `~/.bullet-trade/setting.json` 的 `root_dir`（无设置文件时默认 `~/bullet-trade`）。日志会打印相对路径与展开的绝对路径，方便确认读写位置。
 - 初始化提示：若尚未创建研究根目录或设置文件，调用时会提示运行 `bullet-trade lab` 完成初始化，并标明预期路径。
