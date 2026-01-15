@@ -22,7 +22,9 @@ import os
 import socket
 import ssl
 import struct
+import sys
 import time
+import traceback
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
@@ -30,6 +32,23 @@ import pandas as pd
 _CLIENT: Optional["_ShortLivedClient"] = None
 _DATA_CLIENT: Optional["RemoteDataClient"] = None
 _BROKER_CLIENT: Optional["RemoteBrokerClient"] = None
+
+# 全局调试开关
+_DEBUG: bool = True
+
+
+def _log(level: str, msg: str, *args, **kwargs):
+    """
+    统一的日志输出函数。
+    
+    所有日志都通过此函数输出，受全局 _DEBUG 开关控制。
+    输出到 stderr，避免干扰 stdout。
+    """
+    if not _DEBUG:
+        return
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    formatted_msg = msg.format(*args, **kwargs) if args or kwargs else msg
+    print(f"[{timestamp}] [{level}] {formatted_msg}", file=sys.stderr)
 
 
 def configure(
@@ -43,11 +62,28 @@ def configure(
     retries: int = 2,
     retry_interval: float = 0.5,
     rpc_timeout: float = 60.0,
+    debug: bool = True,
 ) -> None:
     """
     初始化远程访问参数；聚宽环境无法常驻进程，因此每次调用都会短连接访问。
+    
+    Args:
+        host: 服务器主机名或 IP 地址
+        token: 认证令牌
+        port: 服务器端口，默认 58620
+        account_key: 账户键，可选
+        sub_account_id: 子账户 ID，可选
+        tls_cert: TLS 证书文件路径，可选
+        retries: 失败重试次数，默认 2
+        retry_interval: 重试间隔（秒），默认 0.5
+        rpc_timeout: RPC 超时时间（秒），默认 60.0
+        debug: 是否启用调试日志，默认 True
     """
-    global _CLIENT, _DATA_CLIENT, _BROKER_CLIENT
+    global _CLIENT, _DATA_CLIENT, _BROKER_CLIENT, _DEBUG
+    
+    _DEBUG = debug
+    _log("INFO", "初始化远程连接: host={}, port={}, retries={}, debug={}", host, port, retries, debug)
+    
     _CLIENT = _ShortLivedClient(
         host,
         port,
@@ -63,6 +99,8 @@ def configure(
         account_key=account_key,
         sub_account_id=sub_account_id,
     )
+    
+    _log("INFO", "初始化完成")
 
 
 def get_data_client() -> "RemoteDataClient":
@@ -343,49 +381,79 @@ class RemoteBrokerClient:
         - 限价单涨跌停校验
         - 卖出可卖数量检查
         """
-        payload = self._base_payload()
-        
-        # 简化价格处理：price=None 表示市价单，服务端会自动计算价格笼子
-        if price is None:
-            style = {"type": "market"}
-        else:
-            style = {"type": "limit", "price": float(price)}
-        
-        payload.update({
-            "security": security,
-            "side": side,
-            "amount": amount,
-            "style": style,
-        })
-        
-        resp = self._client.request("broker.place_order", payload)
-        
-        # 处理服务端警告
-        warning = resp.get("warning") if isinstance(resp, dict) else None
-        if warning:
-            print(f"[远程警告] {warning}")
-        
-        # 服务端返回实际执行的数量和价格（可能因取整/价格笼子而不同）
-        actual_amount = resp.get("amount") if isinstance(resp, dict) else None
-        actual_price = resp.get("price") if isinstance(resp, dict) else None
-        
-        # 如果服务端返回了不同的数量，提示用户
-        if actual_amount is not None and actual_amount != amount:
-            print(f"[信息] {security} 数量已从 {amount} 调整为 {actual_amount}（最小手数/步进取整）")
-        
-        order = RemoteOrder(
-            order_id=resp.get("order_id") if isinstance(resp, dict) else None,
-            status=resp.get("status", "submitted") if isinstance(resp, dict) else "submitted",
-            security=security,
-            amount=amount,
-            price=price,
-            actual_amount=actual_amount,
-            actual_price=actual_price,
-        )
-        
-        if wait_timeout and order.order_id:
-            self._wait_order(order.order_id, wait_timeout)
-        return order
+        try:
+            _log("INFO", "[下单] 准备下单: security={}, amount={}, price={}, side={}, wait_timeout={}", 
+                 security, amount, price, side, wait_timeout)
+            
+            payload = self._base_payload()
+            
+            # 简化价格处理：price=None 表示市价单，服务端会自动计算价格笼子
+            if price is None:
+                style = {"type": "market"}
+            else:
+                style = {"type": "limit", "price": float(price)}
+            
+            payload.update({
+                "security": security,
+                "side": side,
+                "amount": amount,
+                "style": style,
+            })
+            
+            _log("DEBUG", "[下单] 发送下单请求: payload={}", payload)
+            resp = self._client.request("broker.place_order", payload)
+            _log("DEBUG", "[下单] 收到下单响应: resp={}", resp)
+            
+            # 处理服务端警告
+            warning = resp.get("warning") if isinstance(resp, dict) else None
+            if warning:
+                _log("WARN", "[远程警告] {}", warning)
+            
+            # 服务端返回实际执行的数量和价格（可能因取整/价格笼子而不同）
+            actual_amount = resp.get("amount") if isinstance(resp, dict) else None
+            actual_price = resp.get("price") if isinstance(resp, dict) else None
+            
+            # 检查订单 ID
+            order_id = resp.get("order_id") if isinstance(resp, dict) else None
+            if not order_id:
+                error_msg = f"服务端未返回 order_id，响应: {resp}"
+                _log("ERROR", "[下单错误] {}", error_msg)
+                raise RuntimeError(error_msg)
+            
+            # 【逻辑变更】如果订单 ID 是 -1，说明 QMT 下单失败，抛出异常而非静默返回
+            # 原因：-1 是 QMT 返回的错误码，表示下单失败，应该让调用方知道
+            if order_id == "-1" or (isinstance(order_id, (int, float)) and order_id < 0):
+                error_msg = f"下单失败，服务端返回错误订单号: {order_id}, 响应: {resp}"
+                _log("ERROR", "[下单错误] {}", error_msg)
+                raise RuntimeError(error_msg)
+            
+            # 如果服务端返回了不同的数量，提示用户
+            if actual_amount is not None and actual_amount != amount:
+                _log("INFO", "[下单] {} 数量已从 {} 调整为 {}（最小手数/步进取整）", 
+                     security, amount, actual_amount)
+            
+            order = RemoteOrder(
+                order_id=str(order_id),
+                status=resp.get("status", "submitted") if isinstance(resp, dict) else "submitted",
+                security=security,
+                amount=amount,
+                price=price,
+                actual_amount=actual_amount,
+                actual_price=actual_price,
+            )
+            
+            _log("INFO", "[下单] 订单创建成功: order_id={}, status={}", order.order_id, order.status)
+            
+            if wait_timeout and order.order_id:
+                _log("DEBUG", "[下单] 开始等待订单状态 (timeout={}s)", wait_timeout)
+                self._wait_order(order.order_id, wait_timeout)
+            
+            return order
+        except Exception as e:
+            _log("ERROR", "[下单错误] 下单过程异常: security={}, amount={}, side={}, error={}", 
+                 security, amount, side, e)
+            _log("ERROR", "[下单错误] 堆栈:\n{}", traceback.format_exc())
+            raise
 
     def _wait_order(self, order_id: str, timeout: float) -> None:
         start = time.time()
@@ -419,6 +487,9 @@ class RemoteBrokerClient:
 class _ShortLivedClient:
     """
     简单的 TCP+JSON 客户端：每次请求都会重新连接、握手、发送请求并等待响应；失败会按配置重试。
+    
+    注意：每次 request() 调用都会建立新的 TCP 连接，连接后立即握手、发送请求、接收响应、关闭连接。
+    这种设计适合聚宽环境频繁重启的场景，但会产生较多连接开销。
     """
 
     def __init__(
@@ -441,61 +512,235 @@ class _ShortLivedClient:
         self.rpc_timeout = max(5.0, float(rpc_timeout))
 
     def request(self, action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        发送 RPC 请求（每次调用都会建立新的 TCP 连接）。
+        
+        Args:
+            action: RPC 动作名称，如 "broker.place_order"
+            payload: 请求载荷
+            
+        Returns:
+            响应字典
+            
+        Raises:
+            RuntimeError: 所有重试都失败后抛出最后一个异常
+        """
         last_error: Optional[Exception] = None
         attempts = self.retries + 1
-        for i in range(attempts):
+        request_start_time = time.time()
+        
+        _log("INFO", "[RPC] 开始请求: action={}, host={}, port={}, attempts={}", action, self.host, self.port, attempts)
+        
+        for attempt in range(1, attempts + 1):
             sock: Optional[socket.socket] = None
+            connect_start_time = time.time()
+            
             try:
-                sock = socket.create_connection((self.host, self.port), timeout=10)
+                # ========== 1. 建立 TCP 连接 ==========
+                _log("DEBUG", "[RPC] [尝试 {}/{}] 正在连接 TCP: {}:{}", attempt, attempts, self.host, self.port)
+                
+                try:
+                    sock = socket.create_connection((self.host, self.port), timeout=10)
+                    connect_duration = time.time() - connect_start_time
+                    _log("DEBUG", "[RPC] [尝试 {}/{}] TCP 连接成功，耗时 {:.3f}s", attempt, attempts, connect_duration)
+                except socket.gaierror as e:
+                    # DNS 解析失败（这就是 "Name or service not known" 错误的来源）
+                    error_msg = f"DNS 解析失败: host={self.host}, error={e}"
+                    _log("ERROR", "[RPC] [尝试 {}/{}] {}", attempt, attempts, error_msg)
+                    _log("ERROR", "[RPC] [尝试 {}/{}] 堆栈:\n{}", attempt, attempts, traceback.format_exc())
+                    last_error = RuntimeError(error_msg)
+                    if attempt < attempts:
+                        _log("INFO", "[RPC] [尝试 {}/{}] {}s 后重试...", attempt, attempts, self.retry_interval)
+                        time.sleep(self.retry_interval)
+                    continue
+                except socket.timeout as e:
+                    error_msg = f"连接超时: host={self.host}, port={self.port}, timeout=10s"
+                    _log("ERROR", "[RPC] [尝试 {}/{}] {}", attempt, attempts, error_msg)
+                    _log("ERROR", "[RPC] [尝试 {}/{}] 堆栈:\n{}", attempt, attempts, traceback.format_exc())
+                    last_error = RuntimeError(error_msg)
+                    if attempt < attempts:
+                        _log("INFO", "[RPC] [尝试 {}/{}] {}s 后重试...", attempt, attempts, self.retry_interval)
+                        time.sleep(self.retry_interval)
+                    continue
+                except (ConnectionRefusedError, OSError) as e:
+                    error_msg = f"连接被拒绝或网络错误: host={self.host}, port={self.port}, error={e}"
+                    _log("ERROR", "[RPC] [尝试 {}/{}] {}", attempt, attempts, error_msg)
+                    _log("ERROR", "[RPC] [尝试 {}/{}] 堆栈:\n{}", attempt, attempts, traceback.format_exc())
+                    last_error = RuntimeError(error_msg)
+                    if attempt < attempts:
+                        _log("INFO", "[RPC] [尝试 {}/{}] {}s 后重试...", attempt, attempts, self.retry_interval)
+                        time.sleep(self.retry_interval)
+                    continue
+                
+                # ========== 2. TLS 握手（如果启用） ==========
                 if self.tls_cert:
-                    context = ssl.create_default_context(cafile=self.tls_cert)
-                    sock = context.wrap_socket(sock, server_hostname=self.host)
+                    try:
+                        _log("DEBUG", "[RPC] [尝试 {}/{}] 开始 TLS 握手", attempt, attempts)
+                        context = ssl.create_default_context(cafile=self.tls_cert)
+                        sock = context.wrap_socket(sock, server_hostname=self.host)
+                        _log("DEBUG", "[RPC] [尝试 {}/{}] TLS 握手成功", attempt, attempts)
+                    except Exception as e:
+                        error_msg = f"TLS 握手失败: {e}"
+                        _log("ERROR", "[RPC] [尝试 {}/{}] {}", attempt, attempts, error_msg)
+                        _log("ERROR", "[RPC] [尝试 {}/{}] 堆栈:\n{}", attempt, attempts, traceback.format_exc())
+                        last_error = RuntimeError(error_msg)
+                        if attempt < attempts:
+                            _log("INFO", "[RPC] [尝试 {}/{}] {}s 后重试...", attempt, attempts, self.retry_interval)
+                            time.sleep(self.retry_interval)
+                        continue
+                
                 sock.settimeout(self.rpc_timeout)
-                self._send(sock, {"type": "handshake", "protocol": 1, "token": self.token, "features": []})
-                ack = self._recv(sock)
-                if ack.get("type") != "handshake_ack":
-                    raise RuntimeError("远程服务拒绝握手")
+                
+                # ========== 3. 应用层握手 ==========
+                try:
+                    _log("DEBUG", "[RPC] [尝试 {}/{}] 发送应用层握手", attempt, attempts)
+                    handshake_msg = {"type": "handshake", "protocol": 1, "token": self.token, "features": []}
+                    self._send(sock, handshake_msg)
+                    ack = self._recv(sock)
+                    _log("DEBUG", "[RPC] [尝试 {}/{}] 收到握手响应: {}", attempt, attempts, ack.get("type"))
+                    
+                    if ack.get("type") != "handshake_ack":
+                        raise RuntimeError(f"远程服务拒绝握手: {ack}")
+                    _log("DEBUG", "[RPC] [尝试 {}/{}] 应用层握手成功", attempt, attempts)
+                except Exception as e:
+                    error_msg = f"应用层握手失败: {e}"
+                    _log("ERROR", "[RPC] [尝试 {}/{}] {}", attempt, attempts, error_msg)
+                    _log("ERROR", "[RPC] [尝试 {}/{}] 堆栈:\n{}", attempt, attempts, traceback.format_exc())
+                    last_error = RuntimeError(error_msg)
+                    if attempt < attempts:
+                        _log("INFO", "[RPC] [尝试 {}/{}] {}s 后重试...", attempt, attempts, self.retry_interval)
+                        time.sleep(self.retry_interval)
+                    continue
+                
+                # ========== 4. 发送 RPC 请求 ==========
                 req_id = str(id(payload) ^ int.from_bytes(os.urandom(4), "big"))
-                self._send(sock, {"type": "request", "id": req_id, "action": action, "payload": payload})
-                while True:
-                    message = self._recv(sock)
-                    msg_type = message.get("type")
-                    if msg_type == "response" and message.get("id") == req_id:
-                        return message.get("payload") or {}
-                    if msg_type == "error":
-                        raise RuntimeError(message.get("message", "server error"))
+                request_msg = {"type": "request", "id": req_id, "action": action, "payload": payload}
+                
+                _log("DEBUG", "[RPC] [尝试 {}/{}] 发送 RPC 请求: action={}, req_id={}, payload_keys={}", 
+                     attempt, attempts, action, req_id, list(payload.keys()) if isinstance(payload, dict) else "N/A")
+                
+                try:
+                    self._send(sock, request_msg)
+                    _log("DEBUG", "[RPC] [尝试 {}/{}] RPC 请求已发送", attempt, attempts)
+                except Exception as e:
+                    error_msg = f"发送 RPC 请求失败: {e}"
+                    _log("ERROR", "[RPC] [尝试 {}/{}] {}", attempt, attempts, error_msg)
+                    _log("ERROR", "[RPC] [尝试 {}/{}] 堆栈:\n{}", attempt, attempts, traceback.format_exc())
+                    last_error = RuntimeError(error_msg)
+                    if attempt < attempts:
+                        _log("INFO", "[RPC] [尝试 {}/{}] {}s 后重试...", attempt, attempts, self.retry_interval)
+                        time.sleep(self.retry_interval)
+                    continue
+                
+                # ========== 5. 接收响应 ==========
+                response_start_time = time.time()
+                try:
+                    _log("DEBUG", "[RPC] [尝试 {}/{}] 等待 RPC 响应 (timeout={}s)", attempt, attempts, self.rpc_timeout)
+                    while True:
+                        message = self._recv(sock)
+                        msg_type = message.get("type")
+                        _log("DEBUG", "[RPC] [尝试 {}/{}] 收到消息: type={}, id={}", 
+                             attempt, attempts, msg_type, message.get("id"))
+                        
+                        if msg_type == "response" and message.get("id") == req_id:
+                            response_duration = time.time() - response_start_time
+                            response_payload = message.get("payload") or {}
+                            _log("INFO", "[RPC] [尝试 {}/{}] RPC 请求成功: action={}, 耗时 {:.3f}s, response_keys={}", 
+                                 attempt, attempts, action, response_duration, 
+                                 list(response_payload.keys()) if isinstance(response_payload, dict) else "N/A")
+                            return response_payload
+                        
+                        if msg_type == "error":
+                            error_payload = message.get("payload") or {}
+                            error_message = message.get("message", "server error")
+                            _log("ERROR", "[RPC] [尝试 {}/{}] 服务器返回错误: message={}, payload={}", 
+                                 attempt, attempts, error_message, error_payload)
+                            raise RuntimeError(f"服务器错误: {error_message}")
+                            
+                except socket.timeout as e:
+                    error_msg = f"接收响应超时: timeout={self.rpc_timeout}s"
+                    _log("ERROR", "[RPC] [尝试 {}/{}] {}", attempt, attempts, error_msg)
+                    _log("ERROR", "[RPC] [尝试 {}/{}] 堆栈:\n{}", attempt, attempts, traceback.format_exc())
+                    last_error = RuntimeError(error_msg)
+                    if attempt < attempts:
+                        _log("INFO", "[RPC] [尝试 {}/{}] {}s 后重试...", attempt, attempts, self.retry_interval)
+                        time.sleep(self.retry_interval)
+                    continue
+                except Exception as e:
+                    error_msg = f"接收响应失败: {e}"
+                    _log("ERROR", "[RPC] [尝试 {}/{}] {}", attempt, attempts, error_msg)
+                    _log("ERROR", "[RPC] [尝试 {}/{}] 堆栈:\n{}", attempt, attempts, traceback.format_exc())
+                    last_error = RuntimeError(error_msg)
+                    if attempt < attempts:
+                        _log("INFO", "[RPC] [尝试 {}/{}] {}s 后重试...", attempt, attempts, self.retry_interval)
+                        time.sleep(self.retry_interval)
+                    continue
+                
             except Exception as exc:
+                # 捕获所有其他未预期的异常
+                error_msg = f"未预期的异常: {exc}"
+                _log("ERROR", "[RPC] [尝试 {}/{}] {}", attempt, attempts, error_msg)
+                _log("ERROR", "[RPC] [尝试 {}/{}] 堆栈:\n{}", attempt, attempts, traceback.format_exc())
                 last_error = exc
-                time.sleep(self.retry_interval)
+                if attempt < attempts:
+                    _log("INFO", "[RPC] [尝试 {}/{}] {}s 后重试...", attempt, attempts, self.retry_interval)
+                    time.sleep(self.retry_interval)
             finally:
+                # ========== 6. 关闭连接 ==========
                 if sock:
                     try:
+                        _log("DEBUG", "[RPC] [尝试 {}/{}] 关闭 TCP 连接", attempt, attempts)
                         sock.close()
-                    except Exception:
-                        pass
-        raise last_error or RuntimeError("远程请求失败")
+                    except Exception as e:
+                        _log("WARN", "[RPC] [尝试 {}/{}] 关闭连接时出错: {}", attempt, attempts, e)
+        
+        # 所有重试都失败
+        total_duration = time.time() - request_start_time
+        final_error_msg = f"远程请求失败（已重试 {attempts} 次，总耗时 {total_duration:.3f}s）: {last_error}"
+        _log("ERROR", "[RPC] {}", final_error_msg)
+        if last_error:
+            _log("ERROR", "[RPC] 最后一次错误的堆栈:\n{}", traceback.format_exc())
+        raise RuntimeError(final_error_msg)
 
-    @staticmethod
-    def _send(sock: socket.socket, message: Dict[str, Any]) -> None:
-        body = json.dumps(message, ensure_ascii=False).encode("utf-8")
-        header = struct.pack(">I", len(body))
-        sock.sendall(header + body)
+    def _send(self, sock: socket.socket, message: Dict[str, Any]) -> None:
+        """发送消息到服务器"""
+        try:
+            body = json.dumps(message, ensure_ascii=False).encode("utf-8")
+            header = struct.pack(">I", len(body))
+            sock.sendall(header + body)
+            _log("DEBUG", "[RPC] 已发送消息: type={}, size={} bytes", message.get("type"), len(body))
+        except Exception as e:
+            _log("ERROR", "[RPC] 发送消息失败: {}, 堆栈:\n{}", e, traceback.format_exc())
+            raise
 
-    @staticmethod
-    def _recv(sock: socket.socket) -> Dict[str, Any]:
-        header = _ShortLivedClient._read_exact(sock, 4)
-        size = struct.unpack(">I", header)[0]
-        payload = _ShortLivedClient._read_exact(sock, size)
-        return json.loads(payload.decode("utf-8"))
+    def _recv(self, sock: socket.socket) -> Dict[str, Any]:
+        """从服务器接收消息"""
+        try:
+            header = self._read_exact(sock, 4)
+            size = struct.unpack(">I", header)[0]
+            _log("DEBUG", "[RPC] 收到消息头: size={} bytes", size)
+            payload = self._read_exact(sock, size)
+            message = json.loads(payload.decode("utf-8"))
+            _log("DEBUG", "[RPC] 已解析消息: type={}", message.get("type"))
+            return message
+        except Exception as e:
+            _log("ERROR", "[RPC] 接收消息失败: {}, 堆栈:\n{}", e, traceback.format_exc())
+            raise
 
-    @staticmethod
-    def _read_exact(sock: socket.socket, size: int) -> bytes:
+    def _read_exact(self, sock: socket.socket, size: int) -> bytes:
+        """精确读取指定字节数"""
         buf = b""
+        read_start = time.time()
         while len(buf) < size:
-            chunk = sock.recv(size - len(buf))
-            if not chunk:
-                raise RuntimeError("连接中断")
-            buf += chunk
+            remaining = size - len(buf)
+            try:
+                chunk = sock.recv(remaining)
+                if not chunk:
+                    raise RuntimeError(f"连接中断（已读取 {len(buf)}/{size} 字节）")
+                buf += chunk
+            except socket.timeout:
+                elapsed = time.time() - read_start
+                raise RuntimeError(f"读取超时（已读取 {len(buf)}/{size} 字节，耗时 {elapsed:.3f}s）")
         return buf
 
 
