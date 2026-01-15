@@ -9,6 +9,7 @@ QMT 券商适配（最小实现）
 
 import asyncio
 import inspect
+import hashlib
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import time
@@ -224,6 +225,109 @@ class QmtBroker(BrokerBase):
                 row["status"] = mapped_val
                 row["raw_status"] = status
                 result.append(row)
+        return result
+
+    def get_orders(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+        status: Optional[object] = None,
+    ) -> List[Dict[str, Any]]:
+        self._ensure_connected()
+        orders = self.sync_orders()
+        status_val: Optional[str] = None
+        if status is not None:
+            if isinstance(status, OrderStatus):
+                status_val = status.value
+            else:
+                try:
+                    status_val = OrderStatus(str(status)).value
+                except Exception:
+                    return []
+        target_id = str(order_id) if order_id is not None else None
+        result: List[Dict[str, Any]] = []
+        for item in orders:
+            oid = item.get("order_id")
+            mapped_status = self._map_order_status(item.get("status"))
+            mapped_val = mapped_status.value if isinstance(mapped_status, OrderStatus) else mapped_status
+            if target_id and str(oid) != target_id:
+                continue
+            if security and item.get("security") != security:
+                continue
+            if status_val is not None and mapped_val != status_val:
+                continue
+            row = dict(item)
+            row["status"] = mapped_val
+            row["raw_status"] = item.get("status")
+            result.append(row)
+        return result
+
+    def get_trades(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        self._ensure_connected()
+        if not self._xt_trader or not self._xt_account:
+            return []
+        trades = None
+        for name in ("query_stock_trades", "get_stock_trades", "query_trades"):
+            fn = getattr(self._xt_trader, name, None)
+            if callable(fn):
+                try:
+                    trades = fn(self._xt_account)  # type: ignore[arg-type]
+                except Exception:
+                    trades = None
+                break
+        if not trades:
+            return []
+        if isinstance(trades, dict):
+            iterable = [trades]
+        else:
+            iterable = list(trades)
+
+        def _pick(obj: object, *names: str) -> Optional[Any]:
+            if isinstance(obj, dict):
+                for name in names:
+                    if name in obj:
+                        return obj.get(name)
+                return None
+            for name in names:
+                if hasattr(obj, name):
+                    return getattr(obj, name)
+            return None
+
+        target_id = str(order_id) if order_id is not None else None
+        result: List[Dict[str, Any]] = []
+        for item in iterable:
+            oid = _pick(item, "order_id", "entrust_id")
+            if target_id and str(oid) != target_id:
+                continue
+            raw_code = _pick(item, "stock_code", "code", "security")
+            jq_code = self._map_to_jq_symbol(raw_code) if raw_code else None
+            if security and jq_code != security:
+                continue
+            trade_id = _pick(item, "trade_id", "deal_no", "trade_no")
+            price = _pick(item, "trade_price", "price")
+            amount = _pick(item, "trade_volume", "volume", "amount")
+            trade_time = _pick(item, "trade_time", "time")
+            commission = _pick(item, "commission", "comm")
+            tax = _pick(item, "tax", "stamp_tax")
+            if not trade_id:
+                base = f"{oid}-{trade_time}-{price}-{amount}"
+                trade_id = hashlib.md5(base.encode("utf-8")).hexdigest()[:16]
+            result.append(
+                {
+                    "trade_id": str(trade_id),
+                    "order_id": str(oid) if oid is not None else "",
+                    "security": jq_code,
+                    "amount": int(amount or 0),
+                    "price": float(price or 0.0),
+                    "time": trade_time,
+                    "commission": float(commission or 0.0),
+                    "tax": float(tax or 0.0),
+                }
+            )
         return result
 
     async def buy(

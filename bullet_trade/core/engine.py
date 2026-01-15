@@ -21,7 +21,7 @@ from decimal import Decimal, ROUND_HALF_UP
 # except Exception:
 jq = None
 
-from .models import Context, Portfolio, Position, Trade, OrderStatus
+from .models import Context, Portfolio, Position, Trade, Order, OrderStatus
 from .globals import g, log, reset_globals
 from .settings import get_settings, reset_settings, OrderCost, FixedSlippage, PriceRelatedSlippage, StepRelatedSlippage
 from .orders import get_order_queue, clear_order_queue, MarketOrderStyle, LimitOrderStyle
@@ -112,6 +112,7 @@ class BacktestEngine:
         self.context: Optional[Context] = None
         self.daily_records = []  # 每日记录
         self.trades = []  # 所有交易记录
+        self.orders: Dict[str, Order] = {}  # 当日订单快照
         self.events = []  # 事件记录（分红/拆分）
         self._processed_dividend_keys = set()  # 已处理的分红事件键（避免重复处理）
         self.benchmark_data = None  # 基准数据
@@ -126,6 +127,7 @@ class BacktestEngine:
         # 新增：回测运行耗时（秒）
         self.runtime_seconds: Optional[float] = None
         self._trade_calendar: Dict[date, Dict[str, Any]] = {}
+        self._trade_seq = 0
         market_cfg = get_live_trade_config()
         self._market_buy_percent = float(market_cfg.get('market_buy_price_percent', _DEFAULT_MARKET_BUY_PERCENT))
         self._market_sell_percent = float(market_cfg.get('market_sell_price_percent', _DEFAULT_MARKET_SELL_PERCENT))
@@ -199,6 +201,9 @@ class BacktestEngine:
             unsubscribe as _unsubscribe,
             unsubscribe_all as _unsubscribe_all,
             get_current_tick as _get_current_tick,
+            get_open_orders as _get_open_orders,
+            get_orders as _get_orders,
+            get_trades as _get_trades,
         )
         from .orders import (
             order,
@@ -263,6 +268,9 @@ class BacktestEngine:
         module.order_value = order_value
         module.order_target = order_target
         module.order_target_value = order_target_value
+        module.get_open_orders = _get_open_orders
+        module.get_orders = _get_orders
+        module.get_trades = _get_trades
         
         # 注入调度函数
         module.run_daily = run_daily
@@ -393,6 +401,9 @@ class BacktestEngine:
         jq_mod.order_target_value = order_target_value
         jq_mod.cancel_order = cancel_order
         jq_mod.cancel_all_orders = cancel_all_orders
+        jq_mod.get_open_orders = _get_open_orders
+        jq_mod.get_orders = _get_orders
+        jq_mod.get_trades = _get_trades
         jq_mod.MarketOrderStyle = MarketOrderStyle
         jq_mod.LimitOrderStyle = LimitOrderStyle
         # 调度 API
@@ -1514,6 +1525,7 @@ class BacktestEngine:
 
         for order in orders:
             try:
+                self._register_order(order)
                 # 获取当前价格
                 if order.security not in current_data:
                     log.warning(f"无法获取 {order.security} 的行情数据")
@@ -1727,6 +1739,8 @@ class BacktestEngine:
                     log.info(f"卖出 {order.security}: {trade_amount} 股, 成交价 {trade_price:.{price_decimals}f}, 费用 {commission+tax:.2f}")
                 
                 # 记录交易
+                self._trade_seq += 1
+                trade_id = f"T{self._trade_seq:08d}"
                 trade = Trade(
                     order_id=order.order_id,
                     security=order.security,
@@ -1734,7 +1748,8 @@ class BacktestEngine:
                     price=trade_price,
                     time=current_dt,
                     commission=commission,
-                    tax=tax
+                    tax=tax,
+                    trade_id=trade_id,
                 )
                 self.trades.append(trade)
                 
@@ -1753,6 +1768,91 @@ class BacktestEngine:
         
         # 更新账户价值
         self.context.portfolio.update_value()
+
+    def _register_order(self, order: Order) -> None:
+        if not order:
+            return
+        oid = str(getattr(order, "order_id", "") or "")
+        if not oid:
+            return
+        if oid not in self.orders:
+            self.orders[oid] = order
+
+    def _normalize_status(self, status: Optional[object]) -> Optional[str]:
+        if status is None:
+            return None
+        if isinstance(status, OrderStatus):
+            return status.value
+        try:
+            return OrderStatus(str(status)).value
+        except Exception:
+            return None
+
+    def _status_value(self, status: object) -> str:
+        if isinstance(status, OrderStatus):
+            return status.value
+        return str(status)
+
+    def get_orders(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+        status: Optional[object] = None,
+    ) -> Dict[str, Order]:
+        # 先登记队列中的订单，避免遗漏未撮合订单
+        for queued in list(get_order_queue() or []):
+            self._register_order(queued)
+
+        if not self.orders:
+            return {}
+        status_val = self._normalize_status(status)
+        if status is not None and status_val is None:
+            return {}
+        target_id = str(order_id) if order_id is not None else None
+        result: Dict[str, Order] = {}
+        for oid, order in self.orders.items():
+            if target_id and oid != target_id:
+                continue
+            if security and order.security != security:
+                continue
+            if status_val is not None and self._status_value(order.status) != status_val:
+                continue
+            result[oid] = order
+        return result
+
+    def get_open_orders(self) -> Dict[str, Order]:
+        open_states = {
+            OrderStatus.new.value,
+            OrderStatus.open.value,
+            OrderStatus.filling.value,
+            OrderStatus.canceling.value,
+        }
+        orders = self.get_orders()
+        if not orders:
+            return {}
+        return {oid: order for oid, order in orders.items() if self._status_value(order.status) in open_states}
+
+    def get_trades(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+    ) -> Dict[str, Trade]:
+        if not self.trades:
+            return {}
+        target_id = str(order_id) if order_id is not None else None
+        result: Dict[str, Trade] = {}
+        for trade in self.trades:
+            if target_id and trade.order_id != target_id:
+                continue
+            if security and trade.security != security:
+                continue
+            trade_id = trade.trade_id or ""
+            if not trade_id:
+                self._trade_seq += 1
+                trade_id = f"T{self._trade_seq:08d}"
+                trade.trade_id = trade_id
+            result[trade_id] = trade
+        return result
     
     def _calculate_order_amount(self, order, current_price: float) -> int:
         """计算订单实际数量"""

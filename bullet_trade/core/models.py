@@ -187,6 +187,7 @@ class Trade:
         time: 成交时间
         commission: 手续费
         tax: 印花税
+        trade_id: 成交记录ID
     """
     order_id: str
     security: str
@@ -195,6 +196,7 @@ class Trade:
     time: datetime
     commission: float = 0.0
     tax: float = 0.0
+    trade_id: str = ""
 
 
 @dataclass

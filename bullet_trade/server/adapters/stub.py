@@ -56,6 +56,9 @@ class StubBrokerAdapter(RemoteBrokerAdapter):
     async def list_orders(self, account: AccountContext, filters: Optional[Dict] = None) -> List[Dict]:
         return list(self._orders_for(account))
 
+    async def list_trades(self, account: AccountContext, filters: Optional[Dict] = None) -> List[Dict]:
+        return []
+
     async def get_order_status(self, account: AccountContext, order_id: Optional[str] = None, payload: Optional[Dict] = None) -> Dict:
         if not order_id and payload:
             order_id = payload.get("order_id")

@@ -33,6 +33,9 @@ class RemoteBrokerAdapter(Protocol):
     async def list_orders(self, account: AccountContext, filters: Optional[Dict] = None) -> List[Dict]:
         ...
 
+    async def list_trades(self, account: AccountContext, filters: Optional[Dict] = None) -> List[Dict]:
+        ...
+
     async def get_order_status(self, account: AccountContext, order_id: str) -> Dict:
         ...
 

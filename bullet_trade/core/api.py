@@ -414,6 +414,74 @@ def _auto_bind_handle_tick() -> None:
     except Exception:
         return
 
+
+def get_orders(
+    order_id: Optional[str] = None,
+    security: Optional[str] = None,
+    status: Optional[object] = None,
+) -> Dict[str, Order]:
+    """
+    查询当日订单快照（聚宽风格）。
+    """
+    engine = get_current_engine()
+    if not engine:
+        return {}
+    getter = getattr(engine, "get_orders", None)
+    if not callable(getter):
+        return {}
+    try:
+        return getter(order_id=order_id, security=security, status=status) or {}
+    except Exception:
+        return {}
+
+
+def get_open_orders() -> Dict[str, Order]:
+    """
+    查询当日未完成订单快照（聚宽风格）。
+    """
+    engine = get_current_engine()
+    if not engine:
+        return {}
+    getter = getattr(engine, "get_open_orders", None)
+    if callable(getter):
+        try:
+            return getter() or {}
+        except Exception:
+            return {}
+    orders = get_orders()
+    if not orders:
+        return {}
+    open_states = {
+        OrderStatus.new.value,
+        OrderStatus.open.value,
+        OrderStatus.filling.value,
+        OrderStatus.canceling.value,
+    }
+    def _status_value(val: object) -> str:
+        if isinstance(val, OrderStatus):
+            return val.value
+        return str(val)
+    return {oid: order for oid, order in orders.items() if _status_value(order.status) in open_states}
+
+
+def get_trades(
+    order_id: Optional[str] = None,
+    security: Optional[str] = None,
+) -> Dict[str, Trade]:
+    """
+    查询当日成交快照（聚宽风格）。
+    """
+    engine = get_current_engine()
+    if not engine:
+        return {}
+    getter = getattr(engine, "get_trades", None)
+    if not callable(getter):
+        return {}
+    try:
+        return getter(order_id=order_id, security=security) or {}
+    except Exception:
+        return {}
+
 # 导出所有API
 __all__ = [
     # 全局对象
@@ -425,6 +493,7 @@ __all__ = [
     
     # 订单函数
     'order', 'order_value', 'order_target', 'order_target_value', 'cancel_order', 'cancel_all_orders',
+    'get_open_orders', 'get_orders', 'get_trades',
     'MarketOrderStyle', 'LimitOrderStyle',
     
     # 调度函数

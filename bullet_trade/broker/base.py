@@ -150,6 +150,48 @@ class BrokerBase(ABC):
             订单信息字典
         """
         raise NotImplementedError
+
+    def get_orders(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+        status: Optional[object] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        获取当日订单快照（可选过滤），默认空实现。
+
+        Args:
+            order_id: 订单ID
+            security: 标的代码
+            status: 订单状态（可为字符串或 OrderStatus）
+
+        Returns:
+            订单列表
+        """
+        return []
+
+    def get_open_orders(self) -> List[Dict[str, Any]]:
+        """
+        获取当日未完成订单列表，默认空实现。
+        """
+        return []
+
+    def get_trades(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        获取当日成交记录，默认空实现。
+
+        Args:
+            order_id: 订单ID
+            security: 标的代码
+
+        Returns:
+            成交列表
+        """
+        return []
     
     def is_connected(self) -> bool:
         """
@@ -269,6 +311,5 @@ class BrokerBase(ABC):
         except Exception:
 
             pass
-
 
 

@@ -53,6 +53,42 @@ class RemoteQmtBroker(BrokerBase):
         resp = self._connection.request("broker.positions", payload)
         return resp or []
 
+    def get_orders(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+        status: Optional[object] = None,
+    ) -> List[Dict[str, Any]]:
+        payload = self._base_payload()
+        if order_id:
+            payload["order_id"] = order_id
+        if security:
+            payload["security"] = security
+        if status is not None:
+            payload["status"] = getattr(status, "value", status)
+        resp = self._connection.request("broker.orders", payload)
+        return resp or []
+
+    def get_open_orders(self) -> List[Dict[str, Any]]:
+        orders = self.get_orders()
+        if not orders:
+            return []
+        open_states = {"new", "open", "filling", "canceling"}
+        return [row for row in orders if str(row.get("status")) in open_states]
+
+    def get_trades(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        payload = self._base_payload()
+        if order_id:
+            payload["order_id"] = order_id
+        if security:
+            payload["security"] = security
+        resp = self._connection.request("broker.trades", payload)
+        return resp or []
+
     async def buy(
         self,
         security: str,

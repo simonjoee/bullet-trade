@@ -78,6 +78,18 @@ def _trigger_order_processing(wait_timeout: Optional[float] = None) -> None:
         log.warning(f"触发订单处理失败，保留到队列: {e}")
 
 
+def _register_order_snapshot(order_obj: Order) -> None:
+    engine = get_current_engine()
+    if not engine:
+        return
+    register = getattr(engine, "_register_order", None)
+    if callable(register):
+        try:
+            register(order_obj)
+        except Exception:
+            pass
+
+
 def order(
     security: str,
     amount: int,
@@ -126,6 +138,7 @@ def order(
     )
     
     _order_queue.append(order_obj)
+    _register_order_snapshot(order_obj)
     log.debug(f"创建订单: {security}, 数量: {amount}, 价格: {price}")
     _trigger_order_processing(wait_timeout)
     
@@ -148,6 +161,10 @@ def cancel_order(order_or_id: Union[Order, str]) -> bool:
         if queued.order_id == target_id:
             _order_queue.pop(idx)
             log.info(f"🗑️ 本地队列撤单成功: {target_id}")
+            try:
+                queued.status = OrderStatus.canceled
+            except Exception:
+                pass
             removed = True
             break
     engine = get_current_engine()
@@ -166,6 +183,11 @@ def cancel_order(order_or_id: Union[Order, str]) -> bool:
                     result = asyncio.run(result)
             if result:
                 log.info(f"🗑️ 券商撤单已提交: {broker_id}")
+                if isinstance(order_or_id, Order):
+                    try:
+                        order_or_id.status = OrderStatus.canceling
+                    except Exception:
+                        pass
                 return True
         except Exception as exc:
             log.warning(f"券商撤单失败 {broker_id}: {exc}")
@@ -175,6 +197,11 @@ def cancel_order(order_or_id: Union[Order, str]) -> bool:
 def cancel_all_orders() -> int:
     """取消本地队列所有订单，返回取消数量。"""
     count = len(_order_queue)
+    for queued in list(_order_queue):
+        try:
+            queued.status = OrderStatus.canceled
+        except Exception:
+            pass
     _order_queue.clear()
     if count:
         log.info(f"🗑️ 已清空本地订单队列，共 {count} 笔")
@@ -234,6 +261,7 @@ def order_value(
     order_obj._target_value = abs(value)  # type: ignore
     
     _order_queue.append(order_obj)
+    _register_order_snapshot(order_obj)
     log.debug(f"创建订单（按价值）: {security}, 价值: {value}")
     _trigger_order_processing(wait_timeout)
     
@@ -277,6 +305,7 @@ def order_target(
     order_obj._target_amount = amount  # type: ignore
 
     _order_queue.append(order_obj)
+    _register_order_snapshot(order_obj)
     log.debug(f"创建订单（目标股数）: {security}, 目标数量: {amount}")
     _trigger_order_processing(wait_timeout)
 
@@ -320,6 +349,7 @@ def order_target_value(
     order_obj._target_value = value  # type: ignore
 
     _order_queue.append(order_obj)
+    _register_order_snapshot(order_obj)
     log.debug(f"创建订单（目标价值）: {security}, 目标价值 {value}")
     _trigger_order_processing(wait_timeout)
 

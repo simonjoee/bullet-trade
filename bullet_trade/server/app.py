@@ -163,6 +163,7 @@ class ServerApplication:
                 "account": "get_account_info",
                 "positions": "get_positions",
                 "orders": "list_orders",
+                "trades": "list_trades",
                 "order_status": "get_order_status",
                 "place_order": "place_order",
                 "cancel_order": "cancel_order",
@@ -275,6 +276,9 @@ class ServerApplication:
         if method in ("get_account_info", "get_positions"):
             return (ctx,)
         if method == "list_orders":
+            filters = payload.get("filters")
+            return (ctx, filters or payload)
+        if method == "list_trades":
             filters = payload.get("filters")
             return (ctx, filters or payload)
         if method == "get_order_status":

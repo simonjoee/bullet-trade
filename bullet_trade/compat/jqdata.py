@@ -40,6 +40,7 @@ __all__ = [
     
     # 订单相关
     'order', 'order_target', 'order_value', 'order_target_value', 'cancel_order', 'cancel_all_orders',
+    'get_open_orders', 'get_orders', 'get_trades',
     'MarketOrderStyle', 'LimitOrderStyle',
     'FixedSlippage', 'PriceRelatedSlippage', 'StepRelatedSlippage',
     'OrderCost', 'PerTrade',

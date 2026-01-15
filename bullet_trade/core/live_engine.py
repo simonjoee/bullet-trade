@@ -35,7 +35,7 @@ from .events import (
     TradingDayStartEvent,
 )
 from .globals import g, log
-from .models import Context, Portfolio, Position, Order, OrderStyle
+from .models import Context, Portfolio, Position, Order, Trade, OrderStyle, OrderStatus
 from .runtime import set_current_engine
 from .scheduler import (
     get_market_periods,
@@ -219,6 +219,9 @@ class LiveEngine:
         self._risk = get_global_risk_controller()
         self._order_lock: Optional[asyncio.Lock] = None
         self._last_account_refresh: Optional[datetime] = None
+        self._orders: Dict[str, Order] = {}
+        self._trades: Dict[str, Trade] = {}
+        self._broker_order_index: Dict[str, str] = {}
         self._calendar_guard = TradingCalendarGuard(self.config)
         self._initial_nav_synced: bool = False
         self._provider_tick_callback_bound: bool = False
@@ -592,14 +595,23 @@ class LiveEngine:
             open_position_symbols = self._get_open_position_symbols()
             pending_new_positions: Set[str] = set()
             for order in orders:
+                self._register_order(order)
                 plan = self._build_order_plan(order, current_data)
                 if not plan:
+                    try:
+                        order.status = OrderStatus.canceled
+                    except Exception:
+                        pass
                     continue
                 try:
                     price_basis = plan.price if plan.price and plan.price > 0 else plan.last_price
                     order_value = float(plan.amount * max(price_basis, 0.0))
                     if order_value <= 0:
                         log.warning(f"订单 {plan.security} 价值异常，忽略执行")
+                        try:
+                            order.status = OrderStatus.rejected
+                        except Exception:
+                            pass
                         continue
                     action = 'buy' if plan.is_buy else 'sell'
                     risk = self._risk
@@ -616,6 +628,10 @@ class LiveEngine:
                             )
                         except ValueError as risk_exc:
                             log.error(f"风控拒绝委托[{action}] {plan.security}: {risk_exc}")
+                            try:
+                                order.status = OrderStatus.rejected
+                            except Exception:
+                                pass
                             continue
                     price_arg = plan.price if plan.price and plan.price > 0 else None
                     market_flag = bool(plan.is_market)
@@ -640,6 +656,12 @@ class LiveEngine:
                         )
                     try:
                         setattr(order, "_broker_order_id", order_id)
+                        if order_id:
+                            self._broker_order_index[str(order_id)] = order.order_id
+                    except Exception:
+                        pass
+                    try:
+                        order.status = OrderStatus.open
                     except Exception:
                         pass
                     log.info(
@@ -655,10 +677,227 @@ class LiveEngine:
                             pending_new_positions.add(plan.security)
                 except Exception as exc:
                     log.error(f"委托失败 {order.security}: {exc}")
+                    try:
+                        order.status = OrderStatus.rejected
+                    except Exception:
+                        pass
             try:
                 self.refresh_account_snapshot(force=True)
             except Exception as exc:
                 log.debug(f"订单执行后刷新账户快照失败: {exc}")
+
+    def _register_order(self, order: Order) -> None:
+        if not order:
+            return
+        oid = str(getattr(order, "order_id", "") or "")
+        if not oid:
+            return
+        if oid not in self._orders:
+            self._orders[oid] = order
+        broker_id = getattr(order, "_broker_order_id", None)
+        if broker_id:
+            self._broker_order_index[str(broker_id)] = oid
+        # 实盘下单先置为 new，提交后再转 open
+        if getattr(order, "_broker_order_id", None) is None:
+            try:
+                if isinstance(order.status, OrderStatus) and order.status == OrderStatus.open:
+                    order.status = OrderStatus.new
+                elif str(order.status) == OrderStatus.open.value:
+                    order.status = OrderStatus.new
+            except Exception:
+                pass
+
+    def _normalize_status(self, status: Optional[object]) -> Optional[str]:
+        if status is None:
+            return None
+        if isinstance(status, OrderStatus):
+            return status.value
+        try:
+            return OrderStatus(str(status)).value
+        except Exception:
+            return None
+
+    def _status_value(self, status: object) -> str:
+        if isinstance(status, OrderStatus):
+            return status.value
+        return str(status)
+
+    def _coerce_status(self, status: object) -> object:
+        if isinstance(status, OrderStatus):
+            return status
+        try:
+            return OrderStatus(str(status))
+        except Exception:
+            return str(status)
+
+    def _sync_orders_from_broker(self) -> List[Dict[str, Any]]:
+        broker = self.broker
+        if not broker:
+            return []
+        getter = getattr(broker, "get_orders", None)
+        if callable(getter):
+            try:
+                return getter() or []
+            except Exception:
+                return []
+        if broker.supports_orders_sync():
+            try:
+                return broker.sync_orders() or []
+            except Exception:
+                return []
+        return []
+
+    def _apply_order_snapshots(self, snapshots: List[Dict[str, Any]]) -> None:
+        if not snapshots:
+            return
+        for snap in snapshots:
+            if not isinstance(snap, dict):
+                continue
+            broker_oid = snap.get("order_id") or snap.get("entrust_id")
+            if not broker_oid:
+                continue
+            mapped_oid = self._broker_order_index.get(str(broker_oid))
+            if not mapped_oid:
+                continue
+            order = self._orders.get(mapped_oid)
+            if not order:
+                continue
+            status = snap.get("status") or snap.get("state")
+            if status is not None:
+                try:
+                    order.status = self._coerce_status(status)
+                except Exception:
+                    pass
+            if snap.get("price") is not None:
+                try:
+                    order.price = float(snap.get("price") or 0)
+                except Exception:
+                    pass
+            if snap.get("amount") is not None:
+                try:
+                    order.amount = int(snap.get("amount") or 0)
+                except Exception:
+                    pass
+
+    def _build_trade_from_snapshot(self, snapshot: Dict[str, Any]) -> Optional[Trade]:
+        if not snapshot:
+            return None
+        trade_id = snapshot.get("trade_id") or snapshot.get("id") or snapshot.get("trade_no")
+        order_id = snapshot.get("order_id") or snapshot.get("entrust_id")
+        security = snapshot.get("security")
+        if not security:
+            security = snapshot.get("stock_code") or snapshot.get("code")
+        if not trade_id and not order_id:
+            return None
+        mapped_order_id = str(order_id) if order_id is not None else ""
+        if order_id is not None:
+            mapped_order_id = self._broker_order_index.get(str(order_id), str(order_id))
+        amount = snapshot.get("amount") or snapshot.get("volume") or snapshot.get("trade_volume") or 0
+        price = snapshot.get("price") or snapshot.get("trade_price") or 0.0
+        raw_time = snapshot.get("time") or snapshot.get("trade_time")
+        trade_time = None
+        if isinstance(raw_time, datetime):
+            trade_time = raw_time
+        elif raw_time:
+            try:
+                trade_time = pd.to_datetime(raw_time).to_pydatetime()
+            except Exception:
+                trade_time = None
+        trade = Trade(
+            order_id=mapped_order_id,
+            security=str(security) if security else "",
+            amount=int(amount or 0),
+            price=float(price or 0.0),
+            time=trade_time or self.context.current_dt,
+            commission=float(snapshot.get("commission") or 0.0),
+            tax=float(snapshot.get("tax") or 0.0),
+            trade_id=str(trade_id) if trade_id else "",
+        )
+        if not trade.trade_id:
+            trade.trade_id = f"T{hashlib.md5(f'{trade.order_id}-{trade.time}-{trade.amount}-{trade.price}'.encode('utf-8')).hexdigest()[:12]}"
+        return trade
+
+    def _sync_trades_from_broker(self) -> List[Dict[str, Any]]:
+        broker = self.broker
+        if not broker:
+            return []
+        getter = getattr(broker, "get_trades", None)
+        if callable(getter):
+            try:
+                return getter() or []
+            except Exception:
+                return []
+        return []
+
+    def _apply_trade_snapshots(self, snapshots: List[Dict[str, Any]]) -> None:
+        if not snapshots:
+            return
+        for snap in snapshots:
+            if not isinstance(snap, dict):
+                continue
+            trade = self._build_trade_from_snapshot(snap)
+            if not trade or not trade.trade_id:
+                continue
+            self._trades[trade.trade_id] = trade
+
+    def get_orders(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+        status: Optional[object] = None,
+    ) -> Dict[str, Order]:
+        for queued in list(get_order_queue() or []):
+            self._register_order(queued)
+        snapshots = self._sync_orders_from_broker()
+        self._apply_order_snapshots(snapshots)
+
+        if not self._orders:
+            return {}
+        status_val = self._normalize_status(status)
+        if status is not None and status_val is None:
+            return {}
+        target_id = str(order_id) if order_id is not None else None
+        result: Dict[str, Order] = {}
+        for oid, order in self._orders.items():
+            if target_id and oid != target_id:
+                continue
+            if security and order.security != security:
+                continue
+            if status_val is not None and self._status_value(order.status) != status_val:
+                continue
+            result[oid] = order
+        return result
+
+    def get_open_orders(self) -> Dict[str, Order]:
+        open_states = {
+            OrderStatus.new.value,
+            OrderStatus.open.value,
+            OrderStatus.filling.value,
+            OrderStatus.canceling.value,
+        }
+        orders = self.get_orders()
+        if not orders:
+            return {}
+        return {oid: order for oid, order in orders.items() if self._status_value(order.status) in open_states}
+
+    def get_trades(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+    ) -> Dict[str, Trade]:
+        snapshots = self._sync_trades_from_broker()
+        self._apply_trade_snapshots(snapshots)
+        if not self._trades:
+            return {}
+        target_id = str(order_id) if order_id is not None else None
+        result: Dict[str, Trade] = {}
+        for tid, trade in self._trades.items():
+            if target_id and trade.order_id != target_id:
+                continue
+            if security and trade.security != security:
+                continue
+            result[tid] = trade
+        return result
 
     def _build_order_plan(self, order: Order, current_data) -> Optional[_ResolvedOrder]:
         try:
@@ -1036,7 +1275,9 @@ class LiveEngine:
             return
         assert self._loop is not None
         try:
-            await self._loop.run_in_executor(None, self.broker.sync_orders)
+            snapshots = await self._loop.run_in_executor(None, self._sync_orders_from_broker)
+            if snapshots:
+                self._apply_order_snapshots(snapshots)
         except Exception as exc:
             log.debug(f"订单同步失败: {exc}")
 

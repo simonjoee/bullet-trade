@@ -79,6 +79,9 @@
   - `order_target_value(security, value, price=None, style=None, wait_timeout=None)`：将持仓调整到目标市值；价格参数同上。  
   - `cancel_order(order_or_id)`：撤单；若订单仍在本地队列直接移除，否则尝试用券商订单号撤券商。  
   - `cancel_all_orders()`：撤销本地队列所有订单。  
+  - `get_open_orders()`：返回当日未完成订单字典，`key=order_id`，`value=Order` 快照；未完成状态包含 `new/open/filling/canceling`。  
+  - `get_orders(order_id=None, security=None, status=None)`：返回当日订单字典，支持按订单号/标的/状态过滤；`status` 支持 `OrderStatus` 或字符串值；返回快照，需重新调用获取最新状态。  
+  - `get_trades(order_id=None, security=None)`：返回当日成交字典，`key=trade_id`，`value=Trade` 快照；一个订单可对应多笔成交。  
   - 默认 `set_option('order_match_mode', 'immediate')` 时创建即撮合；否则在 bar 结束批量撮合。
 - 价格样式：`MarketOrderStyle(limit_price=None, buy_price_percent=None, sell_price_percent=None)`（市价，可选保护价或价差系数，实盘会带保护价并传 `market=True`）；`LimitOrderStyle(price)`（限价）。
 - 回测撮合：无论市价/限价，成交价按滑点优先级应用（`ref` > `type` > `all` > 旧全局设置 > `security_overrides`/默认 0.00246/2）；保护价/限价仅用于资金检查和接受条件，不直接决定成交价；货币基金强制 0 滑点。
@@ -115,7 +118,7 @@
 - `Context`：`portfolio/current_dt/previous_dt/previous_date/run_params/subportfolios`，策略函数 `initialize/handle_data` 等默认接收此对象。
 - `Portfolio` / `SubPortfolio`：账户与子账户信息，含 `total_value/available_cash/locked_cash/positions` 等；`positions` 为 `{code: Position}`。
 - `Position`：持仓详情，含 `total_amount/closeable_amount/avg_cost/price/value/side` 等，并记录 `today_buy_t1`（T+1 可用数量）。
-- `Order` / `Trade`：委托与成交记录；`OrderStatus`/`OrderStyle` 为枚举；`SecurityUnitData` 为 `current_data` 单标的快照。
+- `Order` / `Trade`：委托与成交记录；`Trade` 含 `trade_id` 字段；`OrderStatus`/`OrderStyle` 为枚举；`SecurityUnitData` 为 `current_data` 单标的快照。
 
 ## 研究文件读写 {#research-io}
 - `read_file(path)` / `write_file(path, content, append=False)`：兼容聚宽，路径必须是研究根目录下的相对路径。根目录来源于 `~/.bullet-trade/setting.json` 的 `root_dir`（无设置文件时默认 `~/bullet-trade`）；日志会打印相对与绝对路径，便于确认实际读写位置。

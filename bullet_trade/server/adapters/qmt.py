@@ -307,10 +307,38 @@ class QmtBrokerAdapter(RemoteBrokerAdapter):
 
     async def list_orders(self, account: AccountContext, filters: Optional[Dict] = None) -> List[Dict]:
         broker = self._broker_for(account)
+        order_id = filters.get("order_id") if filters else None
+        security = filters.get("security") if filters else None
+        status = filters.get("status") if filters else None
+        getter = getattr(broker, "get_orders", None)
+        if getter:
+            orders = await _run_in_qmt_executor(
+                lambda: getter(order_id=order_id, security=security, status=status)
+            )
+            return orders or []
         getter = getattr(broker, "get_open_orders", None)
         if getter:
             orders = await _run_in_qmt_executor(getter)
-            return orders or []
+            if not orders:
+                return []
+            if order_id:
+                orders = [row for row in orders if str(row.get("order_id")) == str(order_id)]
+            if security:
+                orders = [row for row in orders if row.get("security") == security]
+            if status is not None:
+                status_val = getattr(status, "value", status)
+                orders = [row for row in orders if str(row.get("status")) == str(status_val)]
+            return orders
+        return []
+
+    async def list_trades(self, account: AccountContext, filters: Optional[Dict] = None) -> List[Dict]:
+        broker = self._broker_for(account)
+        order_id = filters.get("order_id") if filters else None
+        security = filters.get("security") if filters else None
+        getter = getattr(broker, "get_trades", None)
+        if getter:
+            trades = await _run_in_qmt_executor(lambda: getter(order_id=order_id, security=security))
+            return trades or []
         return []
 
     async def get_order_status(

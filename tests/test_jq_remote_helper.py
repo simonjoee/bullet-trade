@@ -24,7 +24,11 @@ def test_helper_e2e_with_stub(stub_server):
     assert status.get("order_id") == oid
 
     open_orders = helper.get_open_orders()
-    assert any(item.get("order_id") == oid for item in open_orders)
+    assert oid in open_orders
+    orders = helper.get_orders(order_id=oid)
+    assert oid in orders
+    trades = helper.get_trades(order_id=oid)
+    assert isinstance(trades, dict)
 
     cancel_resp = helper.cancel_order(oid)
     assert cancel_resp.get("value") is True or cancel_resp.get("success", True) is True

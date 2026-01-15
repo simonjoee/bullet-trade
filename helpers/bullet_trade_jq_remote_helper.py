@@ -18,6 +18,7 @@
 """
 
 import json
+import hashlib
 import os
 import socket
 import ssl
@@ -184,6 +185,31 @@ class RemoteOrder:
         # 服务端返回的实际执行数量和价格
         self.actual_amount = actual_amount if actual_amount is not None else amount
         self.actual_price = actual_price if actual_price is not None else price
+
+
+class RemoteTrade:
+    """
+    远程成交对象（聚宽风格）。
+    """
+    def __init__(
+        self,
+        trade_id: str,
+        order_id: str,
+        security: str,
+        amount: int,
+        price: float,
+        time: pd.Timestamp,
+        commission: float = 0.0,
+        tax: float = 0.0,
+    ):
+        self.trade_id = trade_id
+        self.order_id = order_id
+        self.security = security
+        self.amount = amount
+        self.price = price
+        self.time = time.to_pydatetime() if isinstance(time, pd.Timestamp) else time
+        self.commission = commission
+        self.tax = tax
 
 
 class RemotePosition:
@@ -355,9 +381,53 @@ class RemoteBrokerClient:
             )
         return positions
 
-    def get_open_orders(self) -> List[Dict[str, Any]]:
+    def get_orders(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+        status: Optional[object] = None,
+    ) -> Dict[str, RemoteOrder]:
         payload = self._base_payload()
-        return self._client.request("broker.orders", payload) or []
+        if order_id:
+            payload["order_id"] = order_id
+        if security:
+            payload["security"] = security
+        if status is not None:
+            payload["status"] = getattr(status, "value", status)
+        rows = self._client.request("broker.orders", payload) or []
+        result: Dict[str, RemoteOrder] = {}
+        for row in rows:
+            order = self._build_order_snapshot(row)
+            if not order:
+                continue
+            result[order.order_id] = order
+        return result
+
+    def get_open_orders(self) -> Dict[str, RemoteOrder]:
+        orders = self.get_orders()
+        if not orders:
+            return {}
+        open_states = {"new", "open", "filling", "canceling"}
+        return {oid: order for oid, order in orders.items() if str(order.status) in open_states}
+
+    def get_trades(
+        self,
+        order_id: Optional[str] = None,
+        security: Optional[str] = None,
+    ) -> Dict[str, RemoteTrade]:
+        payload = self._base_payload()
+        if order_id:
+            payload["order_id"] = order_id
+        if security:
+            payload["security"] = security
+        rows = self._client.request("broker.trades", payload) or []
+        result: Dict[str, RemoteTrade] = {}
+        for row in rows:
+            trade = self._build_trade_snapshot(row)
+            if not trade:
+                continue
+            result[trade.trade_id] = trade
+        return result
 
     def get_order_status(self, order_id: str) -> Dict[str, Any]:
         payload = self._base_payload()
@@ -368,6 +438,56 @@ class RemoteBrokerClient:
         payload = self._base_payload()
         payload["order_id"] = order_id
         return self._client.request("broker.cancel_order", payload)
+
+    def _build_order_snapshot(self, row: Dict[str, Any]) -> Optional[RemoteOrder]:
+        if not isinstance(row, dict):
+            return None
+        order_id = row.get("order_id")
+        if not order_id:
+            return None
+        amount = row.get("amount") or row.get("volume") or 0
+        price = row.get("price")
+        status = row.get("status") or row.get("state") or "open"
+        return RemoteOrder(
+            order_id=str(order_id),
+            status=str(status),
+            security=row.get("security"),
+            amount=int(amount or 0),
+            price=float(price) if price is not None else None,
+            actual_amount=int(amount or 0),
+            actual_price=float(price) if price is not None else None,
+        )
+
+    def _build_trade_snapshot(self, row: Dict[str, Any]) -> Optional[RemoteTrade]:
+        if not isinstance(row, dict):
+            return None
+        trade_id = row.get("trade_id") or row.get("id") or row.get("trade_no")
+        order_id = row.get("order_id") or row.get("entrust_id")
+        security = row.get("security")
+        if not trade_id and not order_id:
+            return None
+        amount = row.get("amount") or row.get("volume") or 0
+        price = row.get("price") or 0.0
+        raw_time = row.get("time") or row.get("trade_time")
+        if isinstance(raw_time, pd.Timestamp):
+            trade_time = raw_time
+        elif raw_time:
+            trade_time = pd.to_datetime(raw_time)
+        else:
+            trade_time = pd.Timestamp.now()
+        if not trade_id:
+            base = f"{order_id}-{trade_time}-{amount}-{price}"
+            trade_id = hashlib.md5(base.encode("utf-8")).hexdigest()[:16]
+        return RemoteTrade(
+            trade_id=str(trade_id),
+            order_id=str(order_id) if order_id is not None else "",
+            security=str(security) if security else "",
+            amount=int(amount or 0),
+            price=float(price or 0.0),
+            time=trade_time,
+            commission=float(row.get("commission") or 0.0),
+            tax=float(row.get("tax") or 0.0),
+        )
 
     # ----- 内部 -----
     def _place_order(self, security: str, amount: int, price: Optional[float], side: str, wait_timeout: float) -> RemoteOrder:
@@ -778,8 +898,23 @@ def get_order_status(order_id: str) -> Dict[str, Any]:
     return get_broker_client().get_order_status(order_id)
 
 
-def get_open_orders() -> List[Dict[str, Any]]:
+def get_open_orders() -> Dict[str, RemoteOrder]:
     return get_broker_client().get_open_orders()
+
+
+def get_orders(
+    order_id: Optional[str] = None,
+    security: Optional[str] = None,
+    status: Optional[object] = None,
+) -> Dict[str, RemoteOrder]:
+    return get_broker_client().get_orders(order_id=order_id, security=security, status=status)
+
+
+def get_trades(
+    order_id: Optional[str] = None,
+    security: Optional[str] = None,
+) -> Dict[str, RemoteTrade]:
+    return get_broker_client().get_trades(order_id=order_id, security=security)
 
 
 def get_account() -> RemoteAccount:
@@ -801,10 +936,13 @@ __all__ = [
     "cancel_order",
     "get_order_status",
     "get_open_orders",
+    "get_orders",
+    "get_trades",
     "get_account",
     "get_positions",
     "RemoteAccount",
     "RemoteOrder",
+    "RemoteTrade",
     "RemotePosition",
     "RemoteDataClient",
     "RemoteBrokerClient",

@@ -47,7 +47,7 @@ def handle_data(context, data):
     bt.order_value('000002.XSHE', 50000)  # 按金额买入
     positions = bt.get_positions()
 ```
-支持接口：`order/order_value/order_target/order_target_value`、`cancel_order/get_order_status/get_open_orders`、`get_account/get_positions`。
+支持接口：`order/order_value/order_target/order_target_value`、`cancel_order/get_order_status/get_open_orders/get_orders/get_trades`、`get_account/get_positions`。
 
 ### 运行效果
 聚宽策略日志+持仓：
