@@ -33,13 +33,25 @@ from .scheduler import (
     set_trade_calendar,
     unschedule_all,
 )
+from ..core.exceptions import FutureDataError
 from ..data.api import (
     set_current_context,
-    get_price as api_get_price,
+    get_price as _data_api_get_price,
     get_trade_days as api_get_trade_days,
     get_data_provider,
     get_security_info,
 )
+
+
+def api_get_price(*args: Any, **kwargs: Any) -> pd.DataFrame:
+    """
+    引擎级别的 get_price 包装，用于捕获 FutureDataError 并以 warning 记录。
+    """
+    try:
+        return _data_api_get_price(*args, **kwargs)
+    except FutureDataError as exc:
+        log.warning("avoid_future_data 拦截未来数据: %s", exc)
+        return pd.DataFrame()
 from .runtime import set_current_engine
 from . import pricing
 from ..utils.env_loader import get_live_trade_config

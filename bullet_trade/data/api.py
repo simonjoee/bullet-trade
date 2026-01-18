@@ -925,7 +925,8 @@ def _get_setting(key: str, default: Any = False) -> Any:
 
 
 def _should_avoid_future() -> bool:
-    return bool(_current_context and _get_setting('avoid_future_data'))
+    # 仅回测上下文（非 live）需要限制未来数据，研究环境无上下文时不处理
+    return bool(_current_context and not _is_live_mode() and _get_setting('avoid_future_data'))
 
 
 def _coerce_datetime(value: Any) -> Optional[datetime]:
