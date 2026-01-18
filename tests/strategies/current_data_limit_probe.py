@@ -17,6 +17,7 @@ USE_REAL_PRICE = _env_bool("BT_USE_REAL_PRICE", True)
 FORCE_NO_ENGINE = _env_bool("BT_FORCE_NO_ENGINE", True)
 AVOID_FUTURE_DATA = _env_bool("BT_AVOID_FUTURE_DATA", True)
 DEBUG_META = _env_bool("BT_DEBUG_META", True)
+DEBUG_RAW = _env_bool("BT_DEBUG_RAW", True)
 EPSILON = 1e-6
 
 
@@ -124,6 +125,56 @@ def _maybe_log_meta(code, phase):
         resolved_decimals,
     )
 
+
+def _maybe_log_raw(code, phase, current_dt):
+    if not DEBUG_RAW:
+        return
+    try:
+        raw_df = get_price(
+            code,
+            end_date=current_dt,
+            count=1,
+            frequency="minute",
+            fields=["close"],
+            fq=None,
+            panel=False,
+        )
+    except Exception as exc:
+        log.error("[涨跌停探针][RAW][%s] %s get_price fq=None 失败: %s", phase, code, exc)
+        return
+    try:
+        pre_df = get_price(
+            code,
+            end_date=current_dt,
+            count=1,
+            frequency="minute",
+            fields=["close"],
+            fq="pre",
+            panel=False,
+        )
+    except Exception as exc:
+        log.error("[涨跌停探针][RAW][%s] %s get_price fq=pre 失败: %s", phase, code, exc)
+        return
+
+    def _extract(df):
+        if df is None or df.empty:
+            return None
+        try:
+            if "close" in df.columns:
+                return float(df["close"].iloc[-1])
+        except Exception:
+            return None
+        return None
+
+    raw_close = _extract(raw_df)
+    pre_close = _extract(pre_df)
+    log.info(
+        "[涨跌停探针][RAW][%s] %s raw_close=%s pre_close=%s",
+        phase,
+        code,
+        f"{raw_close:.6f}" if raw_close is not None else "None",
+        f"{pre_close:.6f}" if pre_close is not None else "None",
+    )
 def initialize(context):
     set_option("avoid_future_data", AVOID_FUTURE_DATA)
     set_option("force_no_engine", FORCE_NO_ENGINE)
@@ -165,6 +216,7 @@ def _validate_snapshot(code, snap, phase):
         paused,
     )
     _maybe_log_meta(code, phase)
+    _maybe_log_raw(code, phase, g._current_dt)
 
     if last_price <= 0:
         _record_error(f"{code} {phase} 最新价为0或缺失")
@@ -183,6 +235,7 @@ def _validate_snapshot(code, snap, phase):
 
 def check_current_data(context):
     phase = context.current_dt.strftime("%H:%M")
+    g._current_dt = context.current_dt
     current_data = get_current_data()
     for code in g.targets:
         try:
