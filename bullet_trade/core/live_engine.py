@@ -445,6 +445,7 @@ class LiveEngine:
             self.async_scheduler.set_market_periods_resolver(lambda _ref=None: self._market_periods)
         if self._strategy_start_date is None:
             self._strategy_start_date = current_date
+            self._persist_strategy_start_date()
         try:
             provider = get_data_provider()
             calendar_days = provider.get_trade_days(end_date=current_date, count=180) or []
@@ -1439,9 +1440,26 @@ class LiveEngine:
                 "settings": self._collect_settings_snapshot(),
                 "tasks": self._collect_scheduler_tasks_snapshot(),
             }
+            if self._strategy_start_date:
+                metadata["strategy_start_date"] = self._strategy_start_date.isoformat()
             persist_strategy_metadata(metadata)
         except Exception as exc:
             log.debug(f"策略元数据快照失败: {exc}")
+
+    def _persist_strategy_start_date(self) -> None:
+        if not self._strategy_start_date:
+            return
+        try:
+            metadata = load_strategy_metadata()
+            if not metadata or metadata.get('version') != 1:
+                return
+            if metadata.get('strategy_start_date') == self._strategy_start_date.isoformat():
+                return
+            metadata = dict(metadata)
+            metadata['strategy_start_date'] = self._strategy_start_date.isoformat()
+            persist_strategy_metadata(metadata)
+        except Exception as exc:
+            log.debug(f"策略起始日写入失败: {exc}")
 
     def _apply_market_period_override(self) -> None:
         expr = (self.config.scheduler_market_periods or "").strip()
@@ -1520,6 +1538,22 @@ class LiveEngine:
         return {key: _normalize(value) for key, value in dict(options).items()}
 
     @staticmethod
+    def _parse_date_value(value: Any) -> Optional[date]:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                try:
+                    return datetime.fromisoformat(value).date()
+                except ValueError:
+                    return None
+        return None
+
+    @staticmethod
     def _serialize_slippage_config(config: Any) -> Optional[Dict[str, Any]]:
         if isinstance(config, PriceRelatedSlippage):
             return {'class': 'PriceRelatedSlippage', 'ratio': float(config.ratio)}
@@ -1587,6 +1621,13 @@ class LiveEngine:
         if not meta or meta.get('version') != 1:
             return False
         try:
+            raw_start_date = meta.get('strategy_start_date')
+            if raw_start_date:
+                parsed_start_date = self._parse_date_value(raw_start_date)
+                if parsed_start_date:
+                    self._strategy_start_date = parsed_start_date
+                else:
+                    log.debug(f"策略起始日格式无效: {raw_start_date}")
             self._apply_settings_snapshot(meta.get('settings') or {})
             self._apply_scheduler_tasks_snapshot(meta.get('tasks') or [])
             return True

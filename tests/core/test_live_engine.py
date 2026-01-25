@@ -17,7 +17,12 @@ from bullet_trade.core import pricing
 from bullet_trade.core.async_scheduler import AsyncScheduler
 from bullet_trade.core.event_bus import EventBus
 from bullet_trade.core.live_engine import LiveEngine, LivePortfolioProxy, TradingCalendarGuard
-from bullet_trade.core.live_runtime import load_subscription_state, save_g
+from bullet_trade.core.live_runtime import (
+    load_strategy_metadata,
+    load_subscription_state,
+    persist_strategy_metadata,
+    save_g,
+)
 from bullet_trade.core.globals import g, reset_globals
 from bullet_trade.core.orders import order, clear_order_queue
 from bullet_trade.core.runtime import set_current_engine
@@ -389,6 +394,83 @@ async def test_initialize_skipped_and_after_code_changed(tmp_path):
     assert (getattr(g, "init_calls", 0) or 0) == 1
     assert (getattr(g, "proc_calls", 0) or 0) == 2
     assert (getattr(g, "after_calls", 0) or 0) == 1
+
+    reset_globals()
+    shutil.rmtree(runtime_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_strategy_start_date_persisted_and_restored(tmp_path):
+    strategy = _write_strategy(tmp_path)
+    runtime_dir = tmp_path / "runtime"
+    cfg = {
+        "runtime_dir": str(runtime_dir),
+        "g_autosave_enabled": False,
+        "account_sync_enabled": False,
+        "order_sync_enabled": False,
+        "tick_sync_enabled": False,
+        "risk_check_enabled": False,
+        "broker_heartbeat_interval": 0,
+        "scheduler_market_periods": "09:30-11:30,13:00-15:00",
+    }
+    loop = asyncio.get_running_loop()
+
+    first_day = date(2025, 1, 2)
+    engine = LiveEngine(
+        strategy_file=strategy,
+        broker_factory=DummyBroker,
+        live_config=cfg,
+        now_provider=lambda: datetime(2025, 1, 2, 9, 0),
+    )
+    engine._loop = loop
+    engine._stop_event = asyncio.Event()
+    engine.event_bus = EventBus(loop)
+    engine.async_scheduler = AsyncScheduler()
+    await engine._bootstrap()
+    await engine._ensure_trading_day(first_day)
+    save_g()
+    meta = load_strategy_metadata()
+    assert meta.get("strategy_start_date") == first_day.isoformat()
+    await engine._shutdown()
+
+    second_day = date(2025, 1, 6)
+    engine2 = LiveEngine(
+        strategy_file=strategy,
+        broker_factory=DummyBroker,
+        live_config=cfg,
+        now_provider=lambda: datetime(2025, 1, 6, 9, 0),
+    )
+    engine2._loop = loop
+    engine2._stop_event = asyncio.Event()
+    engine2.event_bus = EventBus(loop)
+    engine2.async_scheduler = AsyncScheduler()
+    await engine2._bootstrap()
+    assert engine2._strategy_start_date == first_day
+    await engine2._ensure_trading_day(second_day)
+    assert engine2._strategy_start_date == first_day
+    await engine2._shutdown()
+
+    meta = load_strategy_metadata()
+    meta.pop("strategy_start_date", None)
+    persist_strategy_metadata(meta)
+
+    third_day = date(2025, 1, 7)
+    engine3 = LiveEngine(
+        strategy_file=strategy,
+        broker_factory=DummyBroker,
+        live_config=cfg,
+        now_provider=lambda: datetime(2025, 1, 7, 9, 0),
+    )
+    engine3._loop = loop
+    engine3._stop_event = asyncio.Event()
+    engine3.event_bus = EventBus(loop)
+    engine3.async_scheduler = AsyncScheduler()
+    await engine3._bootstrap()
+    assert engine3._strategy_start_date is None
+    await engine3._ensure_trading_day(third_day)
+    meta = load_strategy_metadata()
+    assert meta.get("strategy_start_date") == third_day.isoformat()
+    await engine3._shutdown()
 
     reset_globals()
     shutil.rmtree(runtime_dir, ignore_errors=True)
