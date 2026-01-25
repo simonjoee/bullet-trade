@@ -89,7 +89,7 @@
 | `G_AUTOSAVE_ENABLED`/`G_AUTOSAVE_INTERVAL` | 否 | `true`/`60` | `g` 状态自动保存开关与间隔（秒） |
 | `TICK_SUBSCRIPTION_LIMIT` | 否 | `100` | Tick 订阅标的数量上限 |
 | `TICK_SYNC_ENABLED`/`TICK_SYNC_INTERVAL` | 否 | `true`/`2` | 无推送时的 Tick 轮询开关与间隔（秒） |
-| `CALENDAR_SKIP_WEEKEND`/`CALENDAR_RETRY_MINUTES` | 否 | `true`/`20` | 非交易日检测：周末是否跳过、下一次检查间隔（分钟） |
+| `CALENDAR_SKIP_WEEKEND`/`CALENDAR_RETRY_MINUTES` | 否 | `true`/`1` | 非交易日检测：周末是否跳过、下一次检查间隔（分钟） |
 | `BROKER_HEARTBEAT_INTERVAL` | 否 | `30` | 券商心跳后台任务间隔（秒，<=0 关闭） |
 | `PORTFOLIO_REFRESH_THROTTLE_MS` | 否 | `200` | 访问实时持仓/资金前的最小刷新间隔（毫秒），防止高频刷接口 |
 | `MARKET_BUY_PRICE_PERCENT`/`MARKET_SELL_PRICE_PERCENT` | 否 | `0.015`/`-0.015` | 市价单保护价偏移比例（正=买高、负=卖低，默认 ±1.5%） |

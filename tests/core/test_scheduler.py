@@ -128,6 +128,17 @@ def test_weekly_negative_index_triggers_last_trade_day():
     assert dt.datetime(2024, 6, 14, 10, 0) in schedule
 
 
+def test_weekly_monthly_skip_when_day_not_in_calendar():
+    run_weekly(lambda ctx: None, weekday=1, time="10:00")
+    run_monthly(lambda ctx: None, monthday=1, time="10:00")
+    trade_day = dt.datetime(2024, 6, 12)
+    calendar_days = [
+        dt.date(2024, 6, 11),
+    ]
+    schedule = _build_schedule(trade_day, calendar_days)
+    assert dt.datetime(2024, 6, 12, 10, 0) not in schedule
+
+
 def test_monthly_close_offset_rolls_forward_for_holiday():
     run_monthly(lambda ctx: None, monthday=5, time="close+1h")
     # 当月仅有 4 个交易日，force=True 默认就近取最后一个交易日

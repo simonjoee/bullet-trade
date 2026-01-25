@@ -312,7 +312,7 @@ def get_live_trade_config() -> dict:
         'risk_check_interval': get_env_int('RISK_CHECK_INTERVAL', 300),
         'risk_check_enabled': get_env_bool('RISK_CHECK_ENABLED', False),
         'calendar_skip_weekend': get_env_bool('CALENDAR_SKIP_WEEKEND', True),
-        'calendar_retry_minutes': get_env_int('CALENDAR_RETRY_MINUTES', 20),
+        'calendar_retry_minutes': get_env_int('CALENDAR_RETRY_MINUTES', 1),
         'broker_heartbeat_interval': get_env_int('BROKER_HEARTBEAT_INTERVAL', 30),
         'runtime_dir': get_env('RUNTIME_DIR', './runtime'),
         'portfolio_refresh_throttle_ms': get_env_int('PORTFOLIO_REFRESH_THROTTLE_MS', 200),

@@ -622,7 +622,7 @@ def generate_daily_schedule(
     resolver = market_periods_resolver or _resolve_market_periods_for_security
     target_date = trade_day.date()
     day_info = calendar.get(target_date)
-    if day_info is None:
+    if day_info is None and not calendar:
         # 回退：若未提供日历，视为单一交易日且序号为 1
         calendar = _build_trade_calendar([target_date], target_date)
         day_info = calendar.get(target_date)
@@ -645,12 +645,12 @@ def generate_daily_schedule(
             times = task.expression.resolve(trade_day, market_periods)
         elif stype_value == ScheduleType.WEEKLY.value:
             weekday = getattr(task, "weekday", None)
-            if weekday is None or not _should_trigger_weekly(day_info, weekday, getattr(task, "force", True)):
+            if day_info is None or weekday is None or not _should_trigger_weekly(day_info, weekday, getattr(task, "force", True)):
                 continue
             times = task.expression.resolve(trade_day, market_periods)
         elif stype_value == ScheduleType.MONTHLY.value:
             monthday = getattr(task, "monthday", None)
-            if monthday is None or not _should_trigger_monthly(day_info, monthday, getattr(task, "force", True)):
+            if day_info is None or monthday is None or not _should_trigger_monthly(day_info, monthday, getattr(task, "force", True)):
                 continue
             times = task.expression.resolve(trade_day, market_periods)
         else:

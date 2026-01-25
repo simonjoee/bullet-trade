@@ -401,7 +401,7 @@ async def test_calendar_guard_skips_weekend(monkeypatch):
     def _raise(*args, **kwargs):
         raise RuntimeError("no data")
 
-    monkeypatch.setattr("bullet_trade.core.live_engine.get_trade_days", _raise, raising=False)
+    monkeypatch.setattr("bullet_trade.data.api.get_trade_days", _raise, raising=False)
     saturday = datetime(2025, 1, 4, 9, 0)
     result = await guard.ensure_trade_day(saturday)
     assert result is False
@@ -420,11 +420,39 @@ async def test_calendar_guard_weekend_allowed(monkeypatch):
     def _raise(*args, **kwargs):
         raise RuntimeError("no data")
 
-    monkeypatch.setattr("bullet_trade.core.live_engine.get_trade_days", _raise, raising=False)
+    monkeypatch.setattr("bullet_trade.data.api.get_trade_days", _raise, raising=False)
     sunday = datetime(2025, 1, 5, 9, 0)
     result = await guard.ensure_trade_day(sunday)
     assert result is True
     assert guard._confirmed_date == sunday.date()
+
+
+@pytest.mark.asyncio
+async def test_calendar_guard_list_includes_target(monkeypatch):
+    guard = TradingCalendarGuard({"calendar_skip_weekend": True, "calendar_retry_minutes": 1})
+
+    def _fake_days(*_args, **_kwargs):
+        return ["2025-01-06"]
+
+    monkeypatch.setattr("bullet_trade.data.api.get_trade_days", _fake_days, raising=False)
+    monday = datetime(2025, 1, 6, 9, 0)
+    result = await guard.ensure_trade_day(monday)
+    assert result is True
+    assert guard._confirmed_date == monday.date()
+
+
+@pytest.mark.asyncio
+async def test_calendar_guard_list_missing_target(monkeypatch):
+    guard = TradingCalendarGuard({"calendar_skip_weekend": True, "calendar_retry_minutes": 1})
+
+    def _fake_days(*_args, **_kwargs):
+        return ["2025-01-03"]
+
+    monkeypatch.setattr("bullet_trade.data.api.get_trade_days", _fake_days, raising=False)
+    monday = datetime(2025, 1, 6, 9, 0)
+    result = await guard.ensure_trade_day(monday)
+    assert result is False
+    assert guard._next_check == monday + timedelta(minutes=1)
 
 
 @pytest.mark.asyncio

@@ -109,7 +109,7 @@ class LiveConfig:
     buy_price_percent: float
     sell_price_percent: float
     calendar_skip_weekend: bool = True
-    calendar_retry_minutes: int = 20
+    calendar_retry_minutes: int = 1
     portfolio_refresh_throttle_ms: int = 200
 
     @classmethod
@@ -137,6 +137,8 @@ class LiveConfig:
             runtime_dir=str(raw.get('runtime_dir', './runtime')),
             buy_price_percent=float(raw.get('market_buy_price_percent', 0.015)),
             sell_price_percent=float(raw.get('market_sell_price_percent', -0.015)),
+            calendar_skip_weekend=bool(raw.get('calendar_skip_weekend', True)),
+            calendar_retry_minutes=int(raw.get('calendar_retry_minutes', 1)),
             portfolio_refresh_throttle_ms=int(raw.get('portfolio_refresh_throttle_ms', 200)),
         )
 
@@ -2018,7 +2020,7 @@ class TradingCalendarGuard:
         if await self._is_trading_day(today):
             self._confirmed_date = today
             return True
-        wait_minutes = max(5, int(self._config_value("calendar_retry_minutes", 20)))
+        wait_minutes = max(1, int(self._config_value("calendar_retry_minutes", 1)))
         self._next_check = now + timedelta(minutes=wait_minutes)
         log.debug("今日非交易日，下一次检查时间 %s", self._next_check.strftime("%Y-%m-%d %H:%M"))
         return False
@@ -2030,6 +2032,32 @@ class TradingCalendarGuard:
             days = get_trade_days(str(target), str(target))
             if hasattr(days, "empty"):
                 return not days.empty
+            if days is None:
+                return False
+            if isinstance(days, (list, tuple, set)):
+                if not days:
+                    return False
+                for day in days:
+                    try:
+                        if pd.to_datetime(day).date() == target:
+                            return True
+                    except Exception:
+                        continue
+                return False
+            try:
+                iterator = iter(days)
+            except TypeError:
+                return False
+            has_value = False
+            for day in iterator:
+                has_value = True
+                try:
+                    if pd.to_datetime(day).date() == target:
+                        return True
+                except Exception:
+                    continue
+            if has_value:
+                return False
         except Exception:
             pass
         weekend_skip = bool(self._config_value("calendar_skip_weekend", True))

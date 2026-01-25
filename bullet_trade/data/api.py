@@ -293,6 +293,7 @@ def set_data_provider(provider: Union[DataProvider, str], **provider_kwargs) -> 
     _auth_attempted = False
     _security_info_cache = {}
     _cache_forced_off_warned = False
+    _maybe_disable_cache_for_live(_provider)
     try:
         _provider.auth()
         _auth_attempted = True
@@ -314,6 +315,7 @@ def reload_data_provider_from_env(provider_name: Optional[str] = None) -> None:
     _auth_attempted = False
     _security_info_cache = {}
     _cache_forced_off_warned = False
+    _maybe_disable_cache_for_live(_provider)
 
 def get_data_provider(provider_name: Optional[str] = None) -> DataProvider:
     """
@@ -335,6 +337,7 @@ def get_data_provider(provider_name: Optional[str] = None) -> DataProvider:
         _provider_auth_attempted[normalized] = False
 
     _bind_sdk_fallback(provider, normalized)
+    _maybe_disable_cache_for_live(provider)
     _ensure_auth_for(provider, normalized, raise_on_fail=True)
     return provider
 
@@ -352,14 +355,11 @@ def _is_live_mode() -> bool:
         return False
 
 
-def _maybe_disable_cache_for_live() -> None:
-    """
-    实盘模式下强制关闭数据提供者的磁盘缓存，避免延迟/IO风险。
-    """
+def _disable_cache_for_provider(provider: Optional[DataProvider]) -> None:
     global _cache_forced_off_warned
-    if not _is_live_mode():
+    if provider is None:
         return
-    cache_obj = getattr(_provider, "_cache", None)
+    cache_obj = getattr(provider, "_cache", None)
     if cache_obj is None or not getattr(cache_obj, "enabled", False):
         return
     cache_dir = getattr(cache_obj, "cache_dir", "") or "未配置"
@@ -367,6 +367,20 @@ def _maybe_disable_cache_for_live() -> None:
     if not _cache_forced_off_warned:
         log.warning("实盘模式已强制关闭数据源缓存，原缓存目录: %s", cache_dir)
         _cache_forced_off_warned = True
+
+
+def _maybe_disable_cache_for_live(provider: Optional[DataProvider] = None) -> None:
+    """
+    实盘模式下强制关闭数据提供者的磁盘缓存，避免延迟/IO风险。
+    """
+    if not _is_live_mode():
+        return
+    if provider is not None:
+        _disable_cache_for_provider(provider)
+        return
+    _disable_cache_for_provider(_provider)
+    for cached in _provider_cache.values():
+        _disable_cache_for_provider(cached)
 
 
 def _config_base_dir() -> str:
