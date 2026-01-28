@@ -57,6 +57,7 @@ class DummyBroker(BrokerBase):
         amount: int,
         price: float | None = None,
         wait_timeout: float | None = None,
+        remark: str | None = None,
         *,
         market: bool = False,
     ) -> str:
@@ -69,6 +70,7 @@ class DummyBroker(BrokerBase):
         amount: int,
         price: float | None = None,
         wait_timeout: float | None = None,
+        remark: str | None = None,
         *,
         market: bool = False,
     ) -> str:
@@ -849,11 +851,19 @@ async def test_order_waits_until_processed(monkeypatch, tmp_path):
             amount: int,
             price: float | None = None,
             wait_timeout: float | None = None,
+            remark: str | None = None,
             *,
             market: bool = False,
         ) -> str:
             await self.signal.wait()
-            return await super().buy(security, amount, price, wait_timeout=wait_timeout, market=market)
+            return await super().buy(
+                security,
+                amount,
+                price,
+                wait_timeout=wait_timeout,
+                remark=remark,
+                market=market,
+            )
 
     engine = LiveEngine(
         strategy_file=strategy,

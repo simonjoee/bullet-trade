@@ -36,6 +36,7 @@ _BROKER_CLIENT: Optional["RemoteBrokerClient"] = None
 
 # 全局调试开关
 _DEBUG: bool = True
+HELPER_PROTOCOL_VERSION: int = 1
 
 
 def _log(level: str, msg: str, *args, **kwargs):
@@ -50,6 +51,12 @@ def _log(level: str, msg: str, *args, **kwargs):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     formatted_msg = msg.format(*args, **kwargs) if args or kwargs else msg
     print(f"[{timestamp}] [{level}] {formatted_msg}", file=sys.stderr)
+
+
+def _warn(msg: str, *args, **kwargs):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    formatted_msg = msg.format(*args, **kwargs) if args or kwargs else msg
+    print(f"[{timestamp}] [WARN] {formatted_msg}", file=sys.stderr)
 
 
 def configure(
@@ -166,6 +173,10 @@ class RemoteOrder:
     - price: 请求价格
     - actual_amount: 服务端实际执行数量（可能因最小手数/步进取整而不同）
     - actual_price: 服务端实际委托价格（市价单会由服务端计算）
+    - filled: 已成交数量
+    - is_buy: 是否买入
+    - order_remark: 订单备注
+    - strategy_name: 策略标识
     """
     def __init__(
         self,
@@ -176,6 +187,10 @@ class RemoteOrder:
         price: Optional[float] = None,
         actual_amount: Optional[int] = None,
         actual_price: Optional[float] = None,
+        filled: int = 0,
+        is_buy: Optional[bool] = None,
+        order_remark: Optional[str] = None,
+        strategy_name: Optional[str] = None,
     ):
         self.order_id = order_id
         self.status = status
@@ -185,6 +200,10 @@ class RemoteOrder:
         # 服务端返回的实际执行数量和价格
         self.actual_amount = actual_amount if actual_amount is not None else amount
         self.actual_price = actual_price if actual_price is not None else price
+        self.filled = filled
+        self.is_buy = is_buy
+        self.order_remark = order_remark
+        self.strategy_name = strategy_name
 
 
 class RemoteTrade:
@@ -448,6 +467,12 @@ class RemoteBrokerClient:
         amount = row.get("amount") or row.get("volume") or 0
         price = row.get("price")
         status = row.get("status") or row.get("state") or "open"
+        filled = row.get("filled")
+        if filled is None:
+            filled = row.get("traded_volume") or 0
+        is_buy = row.get("is_buy")
+        order_remark = row.get("order_remark") or row.get("remark")
+        strategy_name = row.get("strategy_name")
         return RemoteOrder(
             order_id=str(order_id),
             status=str(status),
@@ -456,6 +481,10 @@ class RemoteBrokerClient:
             price=float(price) if price is not None else None,
             actual_amount=int(amount or 0),
             actual_price=float(price) if price is not None else None,
+            filled=int(filled or 0),
+            is_buy=bool(is_buy) if is_buy is not None else None,
+            order_remark=str(order_remark) if order_remark is not None else None,
+            strategy_name=str(strategy_name) if strategy_name is not None else None,
         )
 
     def _build_trade_snapshot(self, row: Dict[str, Any]) -> Optional[RemoteTrade]:
@@ -714,13 +743,31 @@ class _ShortLivedClient:
                 # ========== 3. 应用层握手 ==========
                 try:
                     _log("DEBUG", "[RPC] [尝试 {}/{}] 发送应用层握手", attempt, attempts)
-                    handshake_msg = {"type": "handshake", "protocol": 1, "token": self.token, "features": []}
+                    handshake_msg = {
+                        "type": "handshake",
+                        "protocol": HELPER_PROTOCOL_VERSION,
+                        "token": self.token,
+                        "features": [],
+                    }
                     self._send(sock, handshake_msg)
                     ack = self._recv(sock)
                     _log("DEBUG", "[RPC] [尝试 {}/{}] 收到握手响应: {}", attempt, attempts, ack.get("type"))
                     
                     if ack.get("type") != "handshake_ack":
                         raise RuntimeError(f"远程服务拒绝握手: {ack}")
+                    server_protocol = ack.get("protocol")
+                    server_protocol_value = None
+                    if server_protocol is not None:
+                        try:
+                            server_protocol_value = int(server_protocol)
+                        except (TypeError, ValueError):
+                            server_protocol_value = None
+                    if server_protocol_value is not None and server_protocol_value > HELPER_PROTOCOL_VERSION:
+                        _warn(
+                            "远程服务协议版本 {} 高于本地 helper 版本 {}，建议升级 helper",
+                            server_protocol_value,
+                            HELPER_PROTOCOL_VERSION,
+                        )
                     _log("DEBUG", "[RPC] [尝试 {}/{}] 应用层握手成功", attempt, attempts)
                 except Exception as e:
                     error_msg = f"应用层握手失败: {e}"

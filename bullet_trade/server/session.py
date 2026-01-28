@@ -9,6 +9,8 @@ from bullet_trade.core.globals import log
 
 from .protocol import ProtocolError, read_message, write_message
 
+PROTOCOL_VERSION = 1
+
 
 class ClientSession:
     """
@@ -62,6 +64,7 @@ class ClientSession:
             "type": "handshake_ack",
             "session_id": self.session_id,
             "keepalive": 20,
+            "protocol": PROTOCOL_VERSION,
             "features": self.app.active_features(),
         }
         try:

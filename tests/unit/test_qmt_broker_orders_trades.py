@@ -51,3 +51,35 @@ def test_qmt_broker_get_trades_mapping(monkeypatch):
     assert trade.get("trade_id") == "t1"
     assert trade.get("order_id") == "o1"
     assert trade.get("security") == "000001.XSHE"
+
+
+@pytest.mark.unit
+def test_qmt_broker_order_snapshot_fields(monkeypatch):
+    broker = QmtBroker(account_id="demo")
+    broker._connected = True
+
+    monkeypatch.setattr(
+        broker,
+        "sync_orders",
+        lambda: [
+            {
+                "order_id": "1",
+                "security": "000001.XSHE",
+                "status": "open",
+                "amount": 1000,
+                "filled": 300,
+                "price": 10.2,
+                "order_type": "buy",
+                "order_remark": "bt:alpha:abcd1234",
+                "strategy_name": "alpha",
+            }
+        ],
+    )
+
+    orders = broker.get_orders()
+    assert len(orders) == 1
+    order = orders[0]
+    assert order.get("filled") == 300
+    assert order.get("is_buy") is True
+    assert order.get("order_remark") == "bt:alpha:abcd1234"
+    assert order.get("strategy_name") == "alpha"

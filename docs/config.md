@@ -83,6 +83,7 @@
 | `ORDER_MAX_VOLUME` | 否 | `1000000` | 单笔委托最大股数，超出自动拆单 |
 | `TRADE_MAX_WAIT_TIME` | 否 | `16` | 同步下单/撤单等待秒数（<=0 走异步立即返回） |
 | `EVENT_TIME_OUT` | 否 | `60` | 调度事件超时时间，延迟超过则丢弃当次事件 |
+| `STRATEGY_NAME` | 否 | `demo-strategy` | 实盘订单备注中的策略标识，便于多策略并行排查；未设置时使用策略文件名 |
 | `SCHEDULER_MARKET_PERIODS` | 否 | `09:30-11:30,13:00-15:00` | 自定义交易时段（期货/夜盘调试） |
 | `ACCOUNT_SYNC_ENABLED`/`ACCOUNT_SYNC_INTERVAL` | 否 | `true`/`60` | 账户快照后台同步开关与间隔（秒） |
 | `ORDER_SYNC_ENABLED`/`ORDER_SYNC_INTERVAL` | 否 | `true`/`10` | 订单状态轮询开关与间隔（秒） |
@@ -93,5 +94,7 @@
 | `BROKER_HEARTBEAT_INTERVAL` | 否 | `30` | 券商心跳后台任务间隔（秒，<=0 关闭） |
 | `PORTFOLIO_REFRESH_THROTTLE_MS` | 否 | `200` | 访问实时持仓/资金前的最小刷新间隔（毫秒），防止高频刷接口 |
 | `MARKET_BUY_PRICE_PERCENT`/`MARKET_SELL_PRICE_PERCENT` | 否 | `0.015`/`-0.015` | 市价单保护价偏移比例（正=买高、负=卖低，默认 ±1.5%） |
+
+> 备注：实盘下单会生成 `bt:<strategy>:<shortid>` 格式的订单备注（仅 ASCII，<=24 字符），其中 `<strategy>` 优先使用 `STRATEGY_NAME`，未设置则取策略文件名短名。
 
 > 提示：敏感信息不要入库，按需覆盖到本地 `.env`。***

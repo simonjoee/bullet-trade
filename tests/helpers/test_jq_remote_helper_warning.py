@@ -24,3 +24,45 @@ def test_warning_print(monkeypatch, capsys):
     broker._place_order("000001.XSHE", 100, None, "BUY", wait_timeout=0)
     captured = capsys.readouterr()
     assert "停牌" in captured.err
+
+
+def test_protocol_version_warning(monkeypatch, capsys):
+    class _DummySocket:
+        def settimeout(self, timeout):
+            return None
+
+        def close(self):
+            return None
+
+    def _fake_create_connection(address, timeout=10):
+        return _DummySocket()
+
+    def _fake_send(self, sock, message):
+        return None
+
+    def _fake_urandom(size):
+        return b"\x00\x00\x00\x01"
+
+    monkeypatch.setattr(helper.socket, "create_connection", _fake_create_connection)
+    monkeypatch.setattr(helper._ShortLivedClient, "_send", _fake_send)
+    monkeypatch.setattr(helper.os, "urandom", _fake_urandom)
+    monkeypatch.setattr(helper, "_DEBUG", False, raising=False)
+
+    client = helper._ShortLivedClient("127.0.0.1", 58620, "token", retries=0)
+    payload = {"foo": "bar"}
+    req_id = str(id(payload) ^ 1)
+
+    responses = [
+        {"type": "handshake_ack", "protocol": helper.HELPER_PROTOCOL_VERSION + 1},
+        {"type": "response", "id": req_id, "payload": {"ok": True}},
+    ]
+
+    def _fake_recv(self, sock):
+        return responses.pop(0)
+
+    monkeypatch.setattr(helper._ShortLivedClient, "_recv", _fake_recv)
+
+    result = client.request("data.snapshot", payload)
+    captured = capsys.readouterr()
+    assert "协议版本" in captured.err
+    assert result == {"ok": True}

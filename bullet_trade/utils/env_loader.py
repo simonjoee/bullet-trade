@@ -263,6 +263,8 @@ def get_live_trade_config() -> dict:
 
     - event_time_out: 策略事件超时秒数（默认 60）
 
+    - strategy_name: 策略名称（用于实盘订单备注标识，可选）
+
     - scheduler_market_periods: 交易时段覆写字符串（如 '09:30-11:30,13:00-15:00'）
 
     - account_sync_interval / enabled: 账户同步间隔秒及开关（默认 60 / True）
@@ -290,6 +292,8 @@ def get_live_trade_config() -> dict:
         'trade_max_wait_time': get_env_int('TRADE_MAX_WAIT_TIME', 16),
 
         'event_time_out': get_env_int('EVENT_TIME_OUT', 60),
+
+        'strategy_name': get_env('STRATEGY_NAME'),
 
         'scheduler_market_periods': get_env('SCHEDULER_MARKET_PERIODS'),
 

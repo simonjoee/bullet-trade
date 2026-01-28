@@ -73,6 +73,7 @@ class StubBrokerAdapter(RemoteBrokerAdapter):
             "security": payload.get("security"),
             "amount": payload.get("amount"),
             "status": "open",
+            "order_remark": payload.get("order_remark") or payload.get("remark"),
         }
         self._orders_for(account).append(order)
         return order

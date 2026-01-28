@@ -10,6 +10,7 @@ LiveEngine
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, time as Time, date
@@ -92,6 +93,7 @@ class LiveConfig:
     order_max_volume: int
     trade_max_wait_time: int
     event_time_out: int
+    strategy_name: Optional[str]
     scheduler_market_periods: Optional[str]
     account_sync_interval: int
     account_sync_enabled: bool
@@ -121,6 +123,7 @@ class LiveConfig:
             order_max_volume=int(raw.get('order_max_volume', 1_000_000)),
             trade_max_wait_time=int(raw.get('trade_max_wait_time', 16)),
             event_time_out=int(raw.get('event_time_out', 60)),
+            strategy_name=raw.get('strategy_name'),
             scheduler_market_periods=raw.get('scheduler_market_periods'),
             account_sync_interval=int(raw.get('account_sync_interval', 60)),
             account_sync_enabled=bool(raw.get('account_sync_enabled', True)),
@@ -648,14 +651,25 @@ class LiveEngine:
                         f"执行委托[{action_label}] {plan.security}: 行情价={plan.last_price:.4f}, "
                         f"委托价={price_repr}（{price_mode}），风格={style_name}, 数量={plan.amount}"
                     )
+                    remark = self._prepare_order_metadata(order)
                     order_id: Optional[str] = None
                     if plan.is_buy:
                         order_id = await self.broker.buy(
-                            plan.security, plan.amount, price_arg, wait_timeout=plan.wait_timeout, market=market_flag
+                            plan.security,
+                            plan.amount,
+                            price_arg,
+                            wait_timeout=plan.wait_timeout,
+                            remark=remark,
+                            market=market_flag,
                         )
                     else:
                         order_id = await self.broker.sell(
-                            plan.security, plan.amount, price_arg, wait_timeout=plan.wait_timeout, market=market_flag
+                            plan.security,
+                            plan.amount,
+                            price_arg,
+                            wait_timeout=plan.wait_timeout,
+                            remark=remark,
+                            market=market_flag,
                         )
                     try:
                         setattr(order, "_broker_order_id", order_id)
@@ -709,6 +723,54 @@ class LiveEngine:
                     order.status = OrderStatus.new
             except Exception:
                 pass
+
+    def _sanitize_strategy_label(self, raw: Optional[str]) -> str:
+        if not raw:
+            return ""
+        try:
+            normalized = unicodedata.normalize("NFKD", str(raw))
+        except Exception:
+            normalized = str(raw)
+        ascii_label = normalized.encode("ascii", "ignore").decode("ascii")
+        if not ascii_label:
+            return ""
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "_", ascii_label).strip("_")
+        return safe.lower()
+
+    def _resolve_strategy_label(self) -> str:
+        label = self._sanitize_strategy_label(self.config.strategy_name)
+        if not label:
+            label = self._sanitize_strategy_label(self.strategy_path.stem)
+        return label or "strategy"
+
+    def _build_order_remark(self, order: Order) -> str:
+        short_id = hashlib.md5(str(order.order_id).encode("utf-8")).hexdigest()[:8]
+        label = self._resolve_strategy_label()
+        max_len = 24 - len("bt") - len(short_id) - 2
+        if max_len < 1:
+            label = "s"
+        else:
+            label = label[:max_len]
+        return f"bt:{label}:{short_id}"
+
+    def _prepare_order_metadata(self, order: Order) -> Optional[str]:
+        if not order:
+            return None
+        try:
+            extra = getattr(order, "extra", None)
+            if extra is None:
+                order.extra = {}
+                extra = order.extra
+            remark = extra.get("order_remark") or getattr(order, "_order_remark", None)
+            if not remark:
+                remark = self._build_order_remark(order)
+                extra["order_remark"] = remark
+            if "strategy_name" not in extra:
+                raw_name = self.config.strategy_name or self.strategy_path.stem
+                extra["strategy_name"] = raw_name
+            return remark
+        except Exception:
+            return None
 
     def _normalize_status(self, status: Optional[object]) -> Optional[str]:
         if status is None:
@@ -771,14 +833,53 @@ class LiveEngine:
                     order.status = self._coerce_status(status)
                 except Exception:
                     pass
-            if snap.get("price") is not None:
+            price = snap.get("price")
+            if price is None:
+                price = snap.get("traded_price") or snap.get("avg_price")
+            if price is not None:
                 try:
-                    order.price = float(snap.get("price") or 0)
+                    order.price = float(price or 0)
                 except Exception:
                     pass
-            if snap.get("amount") is not None:
+            amount = snap.get("amount")
+            if amount is None:
+                amount = snap.get("order_volume") or snap.get("volume")
+            if amount is not None:
                 try:
-                    order.amount = int(snap.get("amount") or 0)
+                    order.amount = int(amount or 0)
+                except Exception:
+                    pass
+            filled = snap.get("filled")
+            if filled is None:
+                filled = snap.get("traded_volume") or snap.get("filled_amount")
+            if filled is not None:
+                try:
+                    order.filled = int(filled or 0)
+                except Exception:
+                    pass
+            is_buy = snap.get("is_buy")
+            if is_buy is None:
+                is_buy = snap.get("isBuy")
+            if is_buy is not None:
+                try:
+                    order.is_buy = bool(is_buy)
+                except Exception:
+                    pass
+            order_remark = snap.get("order_remark") or snap.get("remark")
+            strategy_name = snap.get("strategy_name")
+            order_price = snap.get("order_price")
+            if order_remark or strategy_name or order_price is not None:
+                try:
+                    extra = getattr(order, "extra", None)
+                    if extra is None:
+                        order.extra = {}
+                        extra = order.extra
+                    if order_remark:
+                        extra["order_remark"] = order_remark
+                    if strategy_name:
+                        extra["strategy_name"] = strategy_name
+                    if order_price is not None:
+                        extra["order_price"] = order_price
                 except Exception:
                     pass
 

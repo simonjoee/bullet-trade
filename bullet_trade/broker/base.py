@@ -82,6 +82,7 @@ class BrokerBase(ABC):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        remark: Optional[str] = None,
         *,
         market: bool = False,
     ) -> str:
@@ -93,6 +94,7 @@ class BrokerBase(ABC):
             amount: 买入数量
             price: 委托价格（None为市价；market=True 时亦视为市价，可用作保护价/参考价）
             wait_timeout: 本次下单等待超时（秒），None 表示使用默认配置
+            remark: 订单备注（可选）
             market: 是否按市价委托（由券商映射到对应价格类型）
             
         Returns:
@@ -107,6 +109,7 @@ class BrokerBase(ABC):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        remark: Optional[str] = None,
         *,
         market: bool = False,
     ) -> str:
@@ -118,6 +121,7 @@ class BrokerBase(ABC):
             amount: 卖出数量
             price: 委托价格（None为市价；market=True 时亦视为市价，可用作保护价/参考价）
             wait_timeout: 本次下单等待超时（秒），None 表示使用默认配置
+            remark: 订单备注（可选）
             market: 是否按市价委托（由券商映射到对应价格类型）
             
         Returns:
@@ -311,5 +315,4 @@ class BrokerBase(ABC):
         except Exception:
 
             pass
-
 

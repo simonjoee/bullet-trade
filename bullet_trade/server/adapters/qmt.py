@@ -370,6 +370,7 @@ class QmtBrokerAdapter(RemoteBrokerAdapter):
         security = payload["security"]
         raw_amount = int(payload.get("amount") or payload.get("volume") or 0)
         side = payload.get("side", "BUY").upper()
+        remark = payload.get("order_remark") or payload.get("remark")
         style = payload.get("style") or {"type": "limit"}
         style_type = (style.get("type") or "limit").lower()
         is_market = style_type == "market"
@@ -451,9 +452,23 @@ class QmtBrokerAdapter(RemoteBrokerAdapter):
         logger.info(f"执行下单: {security} {'买入' if is_buy else '卖出'} {amount} 股，价格={price:.4f}，市价单={is_market}")
         
         if is_buy:
-            order = await broker.buy(security, amount, price, wait_timeout=payload.get("wait_timeout"), market=is_market)
+            order = await broker.buy(
+                security,
+                amount,
+                price,
+                wait_timeout=payload.get("wait_timeout"),
+                remark=remark,
+                market=is_market,
+            )
         else:
-            order = await broker.sell(security, amount, price, wait_timeout=payload.get("wait_timeout"), market=is_market)
+            order = await broker.sell(
+                security,
+                amount,
+                price,
+                wait_timeout=payload.get("wait_timeout"),
+                remark=remark,
+                market=is_market,
+            )
         
         if isinstance(order, str):
             return {"order_id": order, "amount": amount, "price": price}

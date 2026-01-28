@@ -224,6 +224,15 @@ class QmtBroker(BrokerBase):
                 row = dict(item)
                 row["status"] = mapped_val
                 row["raw_status"] = status
+                if row.get("filled") is None:
+                    row["filled"] = item.get("traded_volume")
+                if row.get("price") is None:
+                    row["price"] = item.get("traded_price")
+                is_buy = row.get("is_buy")
+                if is_buy is None:
+                    is_buy = self._map_order_side(item.get("order_type"))
+                if is_buy is not None:
+                    row["is_buy"] = bool(is_buy)
                 result.append(row)
         return result
 
@@ -259,6 +268,15 @@ class QmtBroker(BrokerBase):
             row = dict(item)
             row["status"] = mapped_val
             row["raw_status"] = item.get("status")
+            if row.get("filled") is None:
+                row["filled"] = item.get("traded_volume")
+            if row.get("price") is None:
+                row["price"] = item.get("traded_price")
+            is_buy = row.get("is_buy")
+            if is_buy is None:
+                is_buy = self._map_order_side(item.get("order_type"))
+            if is_buy is not None:
+                row["is_buy"] = bool(is_buy)
             result.append(row)
         return result
 
@@ -336,6 +354,7 @@ class QmtBroker(BrokerBase):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        remark: Optional[str] = None,
         *,
         market: bool = False,
     ) -> str:
@@ -352,7 +371,7 @@ class QmtBroker(BrokerBase):
         mapped = self._map_security(security)
         order_ids: List[str] = []
         for qty in chunks:
-            args = self._build_send_order_args(mapped, qty, price, "buy", market)
+            args = self._build_send_order_args(mapped, qty, price, "buy", market, remark)
             oid = await asyncio.to_thread(self._send_order, *args)
             order_ids.append(oid)
             await self._maybe_wait(oid, wait_timeout)
@@ -366,6 +385,7 @@ class QmtBroker(BrokerBase):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        remark: Optional[str] = None,
         *,
         market: bool = False,
     ) -> str:
@@ -380,7 +400,7 @@ class QmtBroker(BrokerBase):
         mapped = self._map_security(security)
         order_ids: List[str] = []
         for qty in chunks:
-            args = self._build_send_order_args(mapped, qty, price, "sell", market)
+            args = self._build_send_order_args(mapped, qty, price, "sell", market, remark)
             oid = await asyncio.to_thread(self._send_order, *args)
             order_ids.append(oid)
             await self._maybe_wait(oid, wait_timeout)
@@ -444,12 +464,22 @@ class QmtBroker(BrokerBase):
                     code = None
                     price = None
                     qty = None
+                    filled = None
+                    traded_price = None
+                    order_type = None
+                    order_remark = None
+                    strategy_name = None
                     if isinstance(it, dict):
                         oid = it.get("order_id") or it.get("orderId") or it.get("entrust_id")
                         status = it.get("order_status") or it.get("status")
                         code = it.get("stock_code") or it.get("code")
                         price = it.get("price")
                         qty = it.get("order_volume") or it.get("volume")
+                        filled = it.get("traded_volume")
+                        traded_price = it.get("traded_price")
+                        order_type = it.get("order_type")
+                        order_remark = it.get("order_remark") or it.get("remark")
+                        strategy_name = it.get("strategy_name") or it.get("strategy")
                     else:
                         for attr in ("order_id", "orderId", "entrust_id"):
                             if hasattr(it, attr):
@@ -469,6 +499,16 @@ class QmtBroker(BrokerBase):
                             if hasattr(it, attr):
                                 qty = getattr(it, attr)
                                 break
+                        if hasattr(it, "traded_volume"):
+                            filled = getattr(it, "traded_volume")
+                        if hasattr(it, "traded_price"):
+                            traded_price = getattr(it, "traded_price")
+                        if hasattr(it, "order_type"):
+                            order_type = getattr(it, "order_type")
+                        if hasattr(it, "order_remark"):
+                            order_remark = getattr(it, "order_remark")
+                        if hasattr(it, "strategy_name"):
+                            strategy_name = getattr(it, "strategy_name")
                     if str(oid) == str(order_id):
                         mapped_status = self._map_order_status(status)
                         return {
@@ -476,8 +516,12 @@ class QmtBroker(BrokerBase):
                             "status": mapped_status.value if isinstance(mapped_status, OrderStatus) else mapped_status,
                             "raw_status": status,
                             "security": code,
-                            "price": price,
+                            "price": traded_price or price,
                             "amount": qty,
+                            "filled": filled,
+                            "order_type": order_type,
+                            "order_remark": order_remark,
+                            "strategy_name": strategy_name,
                         }
             except Exception:
                 continue
@@ -565,6 +609,25 @@ class QmtBroker(BrokerBase):
         # 其他一概视为在途
         return OrderStatus.open
 
+    def _map_order_side(self, order_type: Any) -> Optional[bool]:
+        """根据 order_type 推断买卖方向，无法识别时返回 None。"""
+        try:
+            from xtquant import xtconstant  # type: ignore
+            if order_type == getattr(xtconstant, "STOCK_BUY", None):
+                return True
+            if order_type == getattr(xtconstant, "STOCK_SELL", None):
+                return False
+        except Exception:
+            pass
+        if order_type is None:
+            return None
+        label = str(order_type).strip().lower()
+        if label in ("buy", "stock_buy", "b", "long"):
+            return True
+        if label in ("sell", "stock_sell", "s", "short"):
+            return False
+        return None
+
     # ---------------- 内部辅助 ----------------
     def _split_volume(self, total: int) -> List[int]:
         """按 ORDER_MAX_VOLUME 拆分数量。"""
@@ -583,17 +646,31 @@ class QmtBroker(BrokerBase):
         return result
 
     def _build_send_order_args(
-        self, security: str, amount: int, price: Optional[float], side: str, market: bool
+        self,
+        security: str,
+        amount: int,
+        price: Optional[float],
+        side: str,
+        market: bool,
+        remark: Optional[str],
     ):
         """
         兼容缺少 market 参数的测试桩，动态决定是否传入 market。
         """
         send_order = self._send_order
         try:
-            inspect.signature(send_order).bind(security, amount, price, side, market)
-            return (security, amount, price, side, market)
+            inspect.signature(send_order).bind(security, amount, price, side, market, remark)
+            return (security, amount, price, side, market, remark)
         except TypeError:
-            return (security, amount, price, side)
+            try:
+                inspect.signature(send_order).bind(security, amount, price, side, market)
+                return (security, amount, price, side, market)
+            except TypeError:
+                try:
+                    inspect.signature(send_order).bind(security, amount, price, side, remark)
+                    return (security, amount, price, side, remark)
+                except TypeError:
+                    return (security, amount, price, side)
 
     async def _maybe_wait(self, order_id: str, override_timeout: Optional[float] = None) -> None:
         """根据 TRADE_MAX_WAIT_TIME 执行同步等待骨架（协程版）"""
@@ -724,7 +801,15 @@ class QmtBroker(BrokerBase):
             or getattr(xtconstant, "ORDER_PRICE_TYPE_LIMIT", 0)
         )
 
-    def _send_order(self, security: str, amount: int, price: Optional[float], side: str, market: bool = False) -> str:
+    def _send_order(
+        self,
+        security: str,
+        amount: int,
+        price: Optional[float],
+        side: str,
+        market: bool = False,
+        remark: Optional[str] = None,
+    ) -> str:
         """实际下单（最小实现，需本机已安装 QMT/xtquant）"""
         try:
             from xtquant import xtconstant  # type: ignore
@@ -770,15 +855,39 @@ class QmtBroker(BrokerBase):
         log.info(f"QMT 下单参数: order_type={order_type} price_type={price_type} price_to_use={price_to_use}")
 
         try:
-            oid = self._xt_trader.order_stock(  # type: ignore
-                self._xt_account,
-                security,
-                order_type,
-                int(amount),
-                price_type,
-                price_to_use,
-                "bullet-trade",
-            )
+            strategy_name = "bullet-trade"
+            order_remark = remark or strategy_name
+            try:
+                oid = self._xt_trader.order_stock(  # type: ignore
+                    self._xt_account,
+                    security,
+                    order_type,
+                    int(amount),
+                    price_type,
+                    price_to_use,
+                    strategy_name,
+                    order_remark,
+                )
+            except TypeError:
+                try:
+                    oid = self._xt_trader.order_stock(  # type: ignore
+                        self._xt_account,
+                        security,
+                        order_type,
+                        int(amount),
+                        price_type,
+                        price_to_use,
+                        order_remark,
+                    )
+                except TypeError:
+                    oid = self._xt_trader.order_stock(  # type: ignore
+                        self._xt_account,
+                        security,
+                        order_type,
+                        int(amount),
+                        price_type,
+                        price_to_use,
+                    )
         except Exception as e:
             raise RuntimeError(f"QMT 下单失败: {e}") from e
 
@@ -824,21 +933,34 @@ class QmtBroker(BrokerBase):
             iterable = [candidates]
         else:
             iterable = list(candidates)
+
+        def _pick(obj: object, *names: str) -> Optional[Any]:
+            if isinstance(obj, dict):
+                for name in names:
+                    if name in obj:
+                        return obj.get(name)
+                return None
+            for name in names:
+                if hasattr(obj, name):
+                    return getattr(obj, name)
+            return None
+
         for item in iterable:
             try:
-                oid = None
-                if isinstance(item, dict):
-                    oid = item.get("order_id") or item.get("entrust_id")
-                    code = item.get("stock_code") or item.get("code")
-                    amount = item.get("order_volume") or item.get("volume")
-                    price = item.get("price")
-                    status = item.get("order_status") or item.get("status")
-                else:
-                    oid = getattr(item, "order_id", None) or getattr(item, "entrust_id", None)
-                    code = getattr(item, "stock_code", None) or getattr(item, "code", None)
-                    amount = getattr(item, "order_volume", None) or getattr(item, "volume", None)
-                    price = getattr(item, "price", None)
-                    status = getattr(item, "order_status", None) or getattr(item, "status", None)
+                oid = _pick(item, "order_id", "entrust_id")
+                code = _pick(item, "stock_code", "code")
+                amount = _pick(item, "order_volume", "volume")
+                order_price = _pick(item, "price", "order_price")
+                status = _pick(item, "order_status", "status")
+                filled = _pick(item, "traded_volume", "deal_volume", "filled_volume", "volume_traded")
+                traded_price = _pick(item, "traded_price", "avg_price", "trade_price")
+                order_type = _pick(item, "order_type", "orderType", "type")
+                order_remark = _pick(item, "order_remark", "remark")
+                strategy_name = _pick(item, "strategy_name", "strategy")
+                order_sysid = _pick(item, "order_sysid", "sysid")
+                status_msg = _pick(item, "status_msg", "status_msg")
+                price_type = _pick(item, "price_type", "priceType")
+                order_time = _pick(item, "order_time", "time")
                 if not oid:
                     continue
                 orders.append(
@@ -846,8 +968,18 @@ class QmtBroker(BrokerBase):
                         "order_id": str(oid),
                         "security": self._map_to_jq_symbol(code) if code else None,
                         "amount": amount,
-                        "price": price,
+                        "filled": 0 if filled is None else filled,
+                        "price": 0.0 if traded_price is None else traded_price,
+                        "order_price": order_price,
                         "status": status,
+                        "order_type": order_type,
+                        "is_buy": self._map_order_side(order_type),
+                        "order_remark": order_remark,
+                        "strategy_name": strategy_name,
+                        "order_sysid": order_sysid,
+                        "status_msg": status_msg,
+                        "price_type": price_type,
+                        "order_time": order_time,
                     }
                 )
             except Exception:

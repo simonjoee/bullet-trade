@@ -215,6 +215,7 @@ class Order:
         is_buy: 是否买入
         action: 交易类型（'open' or 'close'）
         style: 下单方式
+        extra: 扩展字段（券商特有信息，如备注/策略名）
     """
     order_id: str
     security: str
@@ -227,6 +228,7 @@ class Order:
     action: str = 'open'
     style: object = OrderStyle.market
     wait_timeout: Optional[float] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

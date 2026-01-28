@@ -95,10 +95,11 @@ class RemoteQmtBroker(BrokerBase):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        remark: Optional[str] = None,
         *,
         market: bool = False,
     ) -> str:
-        return await self._place_order("BUY", security, amount, price, wait_timeout, market)
+        return await self._place_order("BUY", security, amount, price, wait_timeout, remark, market)
 
     async def sell(
         self,
@@ -106,10 +107,11 @@ class RemoteQmtBroker(BrokerBase):
         amount: int,
         price: Optional[float] = None,
         wait_timeout: Optional[float] = None,
+        remark: Optional[str] = None,
         *,
         market: bool = False,
     ) -> str:
-        return await self._place_order("SELL", security, amount, price, wait_timeout, market)
+        return await self._place_order("SELL", security, amount, price, wait_timeout, remark, market)
 
     async def cancel_order(self, order_id: str) -> bool:
         loop = asyncio.get_running_loop()
@@ -150,10 +152,13 @@ class RemoteQmtBroker(BrokerBase):
         amount: int,
         price: Optional[float],
         wait_timeout: Optional[float],
+        remark: Optional[str],
         market: bool = False,
     ) -> asyncio.Future:
         loop = asyncio.get_running_loop()
-        return loop.run_in_executor(None, self._place_order_sync, side, security, amount, price, wait_timeout, market)
+        return loop.run_in_executor(
+            None, self._place_order_sync, side, security, amount, price, wait_timeout, remark, market
+        )
 
     def _place_order_sync(
         self,
@@ -162,6 +167,7 @@ class RemoteQmtBroker(BrokerBase):
         amount: int,
         price: Optional[float],
         wait_timeout: Optional[float],
+        remark: Optional[str],
         market: bool = False,
     ) -> str:
         self._last_warning = None
@@ -183,6 +189,8 @@ class RemoteQmtBroker(BrokerBase):
             payload["wait_timeout"] = wait_timeout
         if effective_market:
             payload["market"] = True
+        if remark:
+            payload["order_remark"] = remark
         payload.update(
             {
                 "security": security,

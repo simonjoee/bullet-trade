@@ -118,7 +118,7 @@
 - `Context`：`portfolio/current_dt/previous_dt/previous_date/run_params/subportfolios`，策略函数 `initialize/handle_data` 等默认接收此对象。
 - `Portfolio` / `SubPortfolio`：账户与子账户信息，含 `total_value/available_cash/locked_cash/positions` 等；`positions` 为 `{code: Position}`。
 - `Position`：持仓详情，含 `total_amount/closeable_amount/avg_cost/price/value/side` 等，并记录 `today_buy_t1`（T+1 可用数量）。
-- `Order` / `Trade`：委托与成交记录；`Trade` 含 `trade_id` 字段；`OrderStatus`/`OrderStyle` 为枚举；`SecurityUnitData` 为 `current_data` 单标的快照。
+- `Order` / `Trade`：委托与成交记录；`Trade` 含 `trade_id` 字段；`OrderStatus`/`OrderStyle` 为枚举；`SecurityUnitData` 为 `current_data` 单标的快照。实盘时 `Order.filled` 返回已成交数量，券商支持时会在 `Order.extra` 中附带 `order_remark/strategy_name` 等扩展字段。
 
 ## 研究文件读写 {#research-io}
 - `read_file(path)` / `write_file(path, content, append=False)`：兼容聚宽，路径必须是研究根目录下的相对路径。根目录来源于 `~/.bullet-trade/setting.json` 的 `root_dir`（无设置文件时默认 `~/bullet-trade`）；日志会打印相对与绝对路径，便于确认实际读写位置。
