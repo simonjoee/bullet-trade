@@ -64,9 +64,15 @@ class RemoteQmtProvider(DataProvider):
         force_no_engine: bool = False,
     ) -> pd.DataFrame:
 
+        def _is_minute_frequency(value: str) -> bool:
+            freq = str(value or "").strip().lower()
+            if "minute" in freq or "min" in freq:
+                return True
+            return freq.endswith("m") and freq[:-1].isdigit()
+
         def _str_format(date_obj):
             if date_obj and isinstance(date_obj, datetime):
-                return date_obj.strftime('%Y-%m-%d %H:%M:%S' if 'minute' in frequency else '%Y-%m-%d')
+                return date_obj.strftime("%Y-%m-%d %H:%M:%S" if _is_minute_frequency(frequency) else "%Y-%m-%d")
             return date_obj
 
         payload = {
@@ -77,6 +83,7 @@ class RemoteQmtProvider(DataProvider):
             "fields": fields,
             "fq": fq,
             "count": count,
+            "pre_factor_ref_date": _str_format(pre_factor_ref_date),
         }
 
         resp = self._connection.request("data.history", payload)

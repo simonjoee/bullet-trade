@@ -109,7 +109,8 @@ class QmtDataAdapter(RemoteDataAdapter):
         end = payload.get("end")
         frequency = payload.get("frequency") or payload.get("period")
         fq = payload.get("fq")
-        
+        pre_factor_ref_date = payload.get("pre_factor_ref_date")
+
         logger.debug(f"[QmtDataAdapter.get_history] 请求参数: security={security}, count={count}, "
                      f"start={start}, end={end}, frequency={frequency}, fq={fq}")
 
@@ -121,6 +122,7 @@ class QmtDataAdapter(RemoteDataAdapter):
                 end_date=end,
                 frequency=frequency,
                 fq=fq,
+                pre_factor_ref_date=pre_factor_ref_date,
             )
 
         try:

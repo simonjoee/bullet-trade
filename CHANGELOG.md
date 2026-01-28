@@ -3,6 +3,26 @@
 本文档记录所有重要的变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.4] - 2026-01-28
+
+### 新增
+- **订单备注/策略名**：下单支持 `remark`，新增 `STRATEGY_NAME`，订单与事件携带策略名与备注，便于多策略区分
+- **订单字段完善**：`Order` 增加已成交数量 `filled`、买卖方向 `is_buy`，并区分委托价与成交均价；`Order.extra` 补充 `order_remark/strategy_name/order_price`
+
+### 修复
+- **远程 QMT get_price datetime 支持**：`start_date/end_date/pre_factor_ref_date` 支持 `datetime`，修复 JSON 序列化异常（#23）
+- **分钟级频率时间截断**：`1m/5m` 等分钟级频率保留时分秒，避免被误处理为日线
+- **复权参考日期透传**：`pre_factor_ref_date` 透传到远程 `data.history` 处理链路
+
+### 增强
+- **远程握手协议提示**：服务端握手返回协议版本，聚宽 helper 每次连接检测版本差异并提示升级
+
+### 文档
+- **聚宽 helper 升级提示**：请务必升级到最新版帮助文件，参见 `https://github.com/BulletTrade/bullet-trade/blob/main/helpers/bullet_trade_jq_remote_helper.py`
+
+### 测试
+- **订单与助手用例**：新增订单备注/订单查询相关测试与 helper 告警输出测试
+
 ## [0.6.3] - 2026-01-25
 
 ### 修复
